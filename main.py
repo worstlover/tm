@@ -91,7 +91,7 @@ FORBIDDEN_WORDS = [
 
 # --- توابع پایگاه داده (SQLite) ---
 def init_db():
-    """Initializes the SQLite database tables if they don't exist."""
+    """Initializes the SQLite database tables if they don't exist and adds default admin."""
     with sqlite3.connect(DATABASE_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -119,6 +119,20 @@ def init_db():
                 username TEXT
             )
         """)
+        
+        # --- اضافه کردن ادمین پیش‌فرض اگر جدول ادمین‌ها خالی باشد ---
+        if MAIN_ADMIN_ID: # فقط اگر MAIN_ADMIN_ID تنظیم شده باشد
+            cursor.execute("SELECT COUNT(*) FROM admins")
+            if cursor.fetchone()[0] == 0:
+                try:
+                    cursor.execute("INSERT INTO admins (user_id, username) VALUES (?, ?)", 
+                                   (MAIN_ADMIN_ID, "default_admin"))
+                    logger.info(f"Default admin {MAIN_ADMIN_ID} added to database.")
+                except sqlite3.IntegrityError:
+                    logger.warning(f"Default admin {MAIN_ADMIN_ID} already exists in database.")
+                except Exception as e:
+                    logger.error(f"Error adding default admin: {e}")
+
         conn.commit()
     logger.info("Database initialized.")
 

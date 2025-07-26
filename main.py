@@ -1,8 +1,10 @@
 import os
 import sqlite3
 import logging
+import traceback
+import html
 from datetime import datetime, timedelta
-from telegram import Update, Bot
+from telegram import Update, Bot, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -13,23 +15,27 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
-# تنظیمات لاگینگ
+# --- تنظیمات لاگینگ ---
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
+# کاهش سطح لاگ برای کتابخانه httpx که معمولاً زیاد پیام می‌دهد
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # --- متغیرهای محیطی ---
 # مطمئن شوید که این متغیرها در Render یا لوکال تنظیم شده‌اند
+# TELEGRAM_BOT_TOKEN: توکن ربات شما از BotFather
+# CHANNEL_ID: شناسه عددی کانال شما (مثلا -100123456789)
+# DATABASE_PATH: مسیر فایل دیتابیس (در Render معمولا /opt/render/project/src/bot_database.db)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) # CHANNEL_ID باید عدد صحیح باشد
-DATABASE_PATH = os.getenv("DATABASE_PATH", "bot_database.db")
+DATABASE_PATH = os.getenv("DATABASE_PATH", "bot_database.db") # مسیر پیش فرض برای لوکال
 
 # --- تنظیمات ربات ---
 MESSAGE_INTERVAL = timedelta(minutes=2)  # محدودیت 2 دقیقه بین پیام‌ها
-WORKING_HOURS_START = 8  # 8 صبح
-WORKING_HOURS_END = 22  # 10 شب
+WORKING_HOURS_START = 8  # 8 صبح (ساعت 8:00)
+WORKING_HOURS_END = 22  # 10 شب (ساعت 22:00)
 
 # --- لیست کلمات ممنوعه فارسی (شما می‌توانید این لیست را گسترش دهید) ---
 FORBIDDEN_WORDS = [
@@ -46,7 +52,7 @@ FORBIDDEN_WORDS = [
     "توطئه‌گر", "فریبکار", "تبهکار", "متخلف", "قانون‌شکن", "مجرم", "جانی", "بزهکار",
     "ارازل", "اوباش", "زورگیر", "باجگیر", "تروریست", "انتحاری", "آشغال", "زباله",
     "چرت", "پرت", "مزخرف", "هتاک", "توهین‌آمیز", "زننده", "شرم‌آور", "رسوا", "افتضاح",
-    "فلاکتبار", "نفرت‌انگیز", "ناخوشایند", "مشمئزکننده", "کثیف", "زشت", "کريه",
+    "فلاکتبار", "نفرت‌انگیز", "ناخوشایند", "مشمئزکننده", "کثیف", "زشت", "کریه",
     "شیطان", "ابلیس", "جن", "دیو", "اهریمن", "شیاطین", "جنایتکار", "جنایتکاران",
     "قاتلین", "نابودگران", "مفسدین", "ستمکاران", "ظالمین", "جهنمی", "عذاب‌آور",
     "نفرین", "لعنت", "مرگ", "تباهی", "نابودی", "هلاکت", "زوال", "فنا", "جهنم", "دوزخ",
@@ -84,7 +90,7 @@ FORBIDDEN_WORDS = [
     "غمزده", "مصیبت_بار", "بحرانی", "خطرناک", "مهلک", "مرگبار", "کثیف", "زشت",
     "نامطبوع", "منزجرکننده", "حال_به_هم_زن", "غیر_قابل_تحمل", "فاسد", "خراب",
     "ناپاک", "نجس", "پلید", "کثیف", "چسبناک", "بودار", "گندیده", "پوسیده",
-    "خراب‌شده", "از_بین_رفته", "نابود_شده", "ویران_شده", "سوخته", "مخروبه",
+    "خراب_شده", "از_بین_رفته", "نابود_شده", "ویران_شده", "سوخته", "مخروبه",
     "داغون", "شلخته", "نامرتب", "کثیف", "بی‌نظم", "پریشان", "آشفته", "سردرگم",
     "بی‌هدف", "بی‌جهت", "بی‌فایده", "بیهوده", "پوچ", "خالی", "تهی", "بی‌ارزش",
     "بی‌اهمیت", "بی‌معنی", "مزخرف", "چرند", "پرت_و_پلا", "خزعبل", "بی‌خود",
@@ -96,6 +102,7 @@ FORBIDDEN_WORDS = [
 
 # --- توابع پایگاه داده (SQLite) ---
 def init_db():
+    """Initializes the SQLite database tables if they don't exist."""
     with sqlite3.connect(DATABASE_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -126,31 +133,39 @@ def init_db():
         conn.commit()
     logger.info("Database initialized.")
 
-def is_admin(user_id):
+def is_admin(user_id: int) -> bool:
+    """Checks if a given user_id is an admin."""
     with sqlite3.connect(DATABASE_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT 1 FROM admins WHERE user_id = ?", (user_id,))
         return cursor.fetchone() is not None
 
-def get_user_alias(user_id):
+def get_user_alias(user_id: int) -> str | None:
+    """Retrieves the alias for a given user_id."""
     with sqlite3.connect(DATABASE_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT alias FROM users WHERE user_id = ?", (user_id,))
         result = cursor.fetchone()
         return result[0] if result else None
 
-def set_user_alias(user_id, username, alias):
+def set_user_alias(user_id: int, username: str, alias: str) -> bool:
+    """Sets or updates a user's alias. Returns True on success, False if alias already exists."""
     with sqlite3.connect(DATABASE_PATH) as conn:
         cursor = conn.cursor()
         try:
-            cursor.execute("INSERT OR REPLACE INTO users (user_id, username, alias, is_banned) VALUES (?, ?, ?, COALESCE((SELECT is_banned FROM users WHERE user_id = ?), 0))",
-                           (user_id, username, alias, user_id))
+            # Preserve existing is_banned status if user already exists
+            cursor.execute("""
+                INSERT OR REPLACE INTO users (user_id, username, alias, is_banned, last_message_time)
+                VALUES (?, ?, ?, COALESCE((SELECT is_banned FROM users WHERE user_id = ?), 0), COALESCE((SELECT last_message_time FROM users WHERE user_id = ?), NULL))
+            """, (user_id, username, alias, user_id, user_id))
             conn.commit()
             return True
         except sqlite3.IntegrityError:
-            return False # Alias already exists
+            # This means the alias already exists for another user
+            return False
 
-def get_last_message_time(user_id):
+def get_last_message_time(user_id: int) -> datetime | None:
+    """Retrieves the last message time for a user."""
     with sqlite3.connect(DATABASE_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT last_message_time FROM users WHERE user_id = ?", (user_id,))
@@ -159,43 +174,54 @@ def get_last_message_time(user_id):
             return datetime.fromisoformat(result[0])
         return None
 
-def update_last_message_time(user_id):
+def update_last_message_time(user_id: int) -> None:
+    """Updates the last message time for a user to now."""
     with sqlite3.connect(DATABASE_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET last_message_time = ? WHERE user_id = ?",
                        (datetime.now().isoformat(), user_id))
         conn.commit()
 
-def is_user_banned(user_id):
+def is_user_banned(user_id: int) -> bool:
+    """Checks if a user is banned."""
     with sqlite3.connect(DATABASE_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT is_banned FROM users WHERE user_id = ?", (user_id,))
         result = cursor.fetchone()
-        return result[0] == 1 if result else False
+        return result[0] == 1 if result else False # Default to not banned if user not found
 
-def ban_user(user_id, username):
+def ban_user(user_id: int, username: str | None) -> None:
+    """Bans a user, adding them if they don't exist."""
     with sqlite3.connect(DATABASE_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO users (user_id, username, is_banned, alias, last_message_time) VALUES (?, ?, 1, COALESCE((SELECT alias FROM users WHERE user_id = ?), NULL), COALESCE((SELECT last_message_time FROM users WHERE user_id = ?), NULL))",
-                       (user_id, username, user_id, user_id))
+        # Insert or replace, preserving alias and last_message_time if user exists
+        cursor.execute("""
+            INSERT OR REPLACE INTO users (user_id, username, is_banned, alias, last_message_time)
+            VALUES (?, ?, 1, COALESCE((SELECT alias FROM users WHERE user_id = ?), NULL), COALESCE((SELECT last_message_time FROM users WHERE user_id = ?), NULL))
+        """, (user_id, username, user_id, user_id))
         conn.commit()
+        logger.info(f"User {user_id} ({username}) banned.")
 
-def unban_user(user_id):
+def unban_user(user_id: int) -> bool:
+    """Unbans a user. Returns True if user was found and unbanned, False otherwise."""
     with sqlite3.connect(DATABASE_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET is_banned = 0 WHERE user_id = ?", (user_id,))
         conn.commit()
-        return cursor.rowcount > 0
+        return cursor.rowcount > 0 # Returns true if a row was updated
 
-def add_pending_media(user_id, file_id, file_type, caption):
+def add_pending_media(user_id: int, file_id: str, file_type: str, caption: str) -> int:
+    """Adds a media item to the pending queue."""
     with sqlite3.connect(DATABASE_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("INSERT INTO pending_media (user_id, file_id, file_type, caption, message_time) VALUES (?, ?, ?, ?, ?)",
                        (user_id, file_id, file_type, caption, datetime.now().isoformat()))
         conn.commit()
+        logger.info(f"Pending media added: {file_type} from {user_id}")
         return cursor.lastrowid
 
-def get_pending_media(media_id=None):
+def get_pending_media(media_id: int | None = None) -> tuple | list[tuple] | None:
+    """Retrieves pending media items. If media_id is provided, returns single item."""
     with sqlite3.connect(DATABASE_PATH) as conn:
         cursor = conn.cursor()
         if media_id:
@@ -205,52 +231,58 @@ def get_pending_media(media_id=None):
             cursor.execute("SELECT * FROM pending_media ORDER BY message_time ASC")
             return cursor.fetchall()
 
-def delete_pending_media(media_id):
+def delete_pending_media(media_id: int) -> bool:
+    """Deletes a pending media item."""
     with sqlite3.connect(DATABASE_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM pending_media WHERE id = ?", (media_id,))
         conn.commit()
         return cursor.rowcount > 0
 
-def get_total_users():
+def get_total_users() -> int:
+    """Gets the total count of registered users."""
     with sqlite3.connect(DATABASE_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM users")
         return cursor.fetchone()[0]
 
-def get_banned_users_count():
+def get_banned_users_count() -> int:
+    """Gets the count of banned users."""
     with sqlite3.connect(DATABASE_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
         return cursor.fetchone()[0]
 
-def get_total_messages():
-    # این تابع فرض می کند که هر ورودی در pending_media یک پیام است.
-    # اگر پیام های متنی مستقیم را هم میخواهید بشمارید، نیاز به جدول مجزا دارید.
+def get_total_messages() -> int:
+    """Gets the total count of messages (from pending_media table)."""
     with sqlite3.connect(DATABASE_PATH) as conn:
-        cursor = conn.cursor()
+        cursor = conn.conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM pending_media")
         return cursor.fetchone()[0]
 
 
 # --- توابع کمکی ---
-def is_working_hours():
+def is_working_hours() -> bool:
+    """Checks if current time is within working hours."""
     now = datetime.now()
     return WORKING_HOURS_START <= now.hour < WORKING_HOURS_END
 
-def contains_forbidden_words(text):
+def contains_forbidden_words(text: str) -> bool:
+    """Checks if the given text contains any forbidden words (case-insensitive)."""
     if not text:
         return False
-    # برای جلوگیری از تشخیص کلمات جزئی، از مرز کلمات (مثلاً با regex) استفاده کنید
-    # اما برای سادگی، فعلاً چک می‌کنیم که آیا کلمه به عنوان زیررشته وجود دارد
+    text_lower = text.lower()
     for word in FORBIDDEN_WORDS:
-        if word in text.lower():
+        # Check for whole words to reduce false positives
+        # Using regex for more robust word boundary matching could be better for production
+        if f" {word} " in f" {text_lower} " or text_lower.startswith(word + " ") or text_lower.endswith(" " + word) or text_lower == word:
             return True
     return False
 
-# --- هندلرهای ربات (Async Functions) ---
+# --- هندلرهای ربات (Async Functions - برای سازگاری با Python-Telegram-Bot v20+) ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sends a welcome message and prompts user to set alias."""
     user_id = update.effective_user.id
     alias = get_user_alias(user_id)
     message = (
@@ -265,8 +297,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         message += "لطفاً از دستور /setalias [نام_مستعار] استفاده کنید."
     await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
 
-
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sends a help message with available commands."""
     user_id = update.effective_user.id
     response_text = (
         "راهنمای استفاده از ربات مدیریت کانال ناشناس:\n\n"
@@ -286,16 +318,20 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
     await update.message.reply_text(response_text, parse_mode=ParseMode.MARKDOWN)
 
-
 async def setalias_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Allows a user to set their unique alias."""
     user_id = update.effective_user.id
     username = update.effective_user.username or f"id_{user_id}"
 
-    if len(context.args) == 0:
+    if not context.args:
         await update.message.reply_text("لطفاً یک نام مستعار وارد کنید. مثال: /setalias روبات")
         return
 
-    new_alias = " ".join(context.args)
+    new_alias = " ".join(context.args).strip()
+    if not new_alias:
+        await update.message.reply_text("نام مستعار نمی‌تواند خالی باشد. لطفاً یک نام معتبر وارد کنید.")
+        return
+
     if contains_forbidden_words(new_alias):
         await update.message.reply_text("نام مستعار شما شامل کلمات ممنوعه است. لطفاً نام دیگری انتخاب کنید.")
         return
@@ -310,14 +346,15 @@ async def setalias_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     else:
         await update.message.reply_text("این نام مستعار قبلاً استفاده شده است. لطفاً نام دیگری انتخاب کنید.")
 
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles incoming text messages and media."""
     user_id = update.effective_user.id
     user_username = update.effective_user.username or f"id_{user_id}"
     user_alias = get_user_alias(user_id)
 
+    # --- بررسی شرایط ارسال پیام ---
     if not is_working_hours() and not is_admin(user_id):
-        await update.message.reply_text("متاسفانه ربات در ساعات کاری (۸ صبح تا ۱۰ شب) فعال است.")
+        await update.message.reply_text(f"متاسفانه ربات فقط در ساعات کاری ({WORKING_HOURS_START}:00 تا {WORKING_HOURS_END}:00) فعال است.")
         return
 
     if is_user_banned(user_id):
@@ -333,24 +370,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         remaining_time = MESSAGE_INTERVAL - (datetime.now() - last_time)
         minutes = int(remaining_time.total_seconds() // 60)
         seconds = int(remaining_time.total_seconds() % 60)
-        await update.message.reply_text(f"لطفاً صبر کنید. شما می‌توانید هر ۲ دقیقه یک پیام ارسال کنید. زمان باقی‌مانده: {minutes} دقیقه و {seconds} ثانیه.")
+        await update.message.reply_text(f"لطفاً صبر کنید. شما می‌توانید هر {int(MESSAGE_INTERVAL.total_seconds() // 60)} دقیقه یک پیام ارسال کنید. زمان باقی‌مانده: {minutes} دقیقه و {seconds} ثانیه.")
         return
 
     message_text = update.message.text
+    caption_text = update.message.caption if (update.message.photo or update.message.video) else ""
+
+    # --- فیلتر کلمات ممنوعه ---
     if message_text and contains_forbidden_words(message_text):
         await update.message.reply_text("پیام شما حاوی کلمات ممنوعه است و ارسال نخواهد شد.")
         return
+    if caption_text and contains_forbidden_words(caption_text):
+        await update.message.reply_text("کپشن شما حاوی کلمات ممنوعه است و رسانه شما تایید نخواهد شد.")
+        return
 
-    update_last_message_time(user_id) # آپدیت زمان آخرین پیام پس از تمام بررسی‌ها
+    # --- به‌روزرسانی زمان آخرین پیام ---
+    update_last_message_time(user_id)
 
+    # --- مدیریت رسانه (عکس و ویدیو) ---
     if update.message.photo or update.message.video:
         file_id = None
         file_type = None
-        caption = update.message.caption or ""
-
-        if contains_forbidden_words(caption):
-            await update.message.reply_text("کپشن شما حاوی کلمات ممنوعه است و رسانه شما تایید نخواهد شد.")
-            return
 
         if update.message.photo:
             file_id = update.message.photo[-1].file_id # بالاترین کیفیت عکس
@@ -360,28 +400,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             file_type = "video"
 
         if file_id:
-            media_id = add_pending_media(user_id, file_id, file_type, caption)
+            media_id = add_pending_media(user_id, file_id, file_type, caption_text)
             admin_message = (
                 f"**رسانه جدید در انتظار تایید!**\n"
-                f"از: {user_alias} (ID: {user_id})\n"
+                f"از: {user_alias} (ID: `{user_id}`)\n"
                 f"نوع: {file_type.capitalize()}\n"
-                f"کپشن: {caption}\n\n"
+                f"کپشن: {caption_text if caption_text else 'بدون کپشن'}\n\n"
                 f"برای تایید/رد: /pending {media_id}"
             )
-            # ارسال به همه ادمین‌ها
-            for admin_id_row in context.bot.get_chat_administrators(chat_id=CHANNEL_ID): # این روش نیاز به تغییر دارد اگر ربات ادمین کانال نباشد
-                 if is_admin(admin_id_row.user.id): # اطمینان از اینکه فقط ادمین های ثبت شده دریافت کنند
+            
+            # ارسال به همه ادمین‌های ثبت شده در دیتابیس
+            with sqlite3.connect(DATABASE_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT user_id FROM admins")
+                admin_ids = [row[0] for row in cursor.fetchall()]
+
+            for admin_db_id in admin_ids:
+                try:
                     await context.bot.send_message(
-                        chat_id=admin_id_row.user.id,
+                        chat_id=admin_db_id,
                         text=admin_message,
                         parse_mode=ParseMode.MARKDOWN
                     )
+                except Exception as e:
+                    logger.warning(f"Could not send pending media notification to admin {admin_db_id}: {e}")
+
             await update.message.reply_text("رسانه شما دریافت شد و پس از تایید مدیر در کانال منتشر خواهد شد.")
         else:
             await update.message.reply_text("خطا در دریافت رسانه.")
 
+    # --- مدیریت پیام متنی ---
     elif message_text:
-        # ارسال پیام متنی به کانال
         try:
             await context.bot.send_message(
                 chat_id=CHANNEL_ID,
@@ -390,7 +439,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             await update.message.reply_text("پیام شما با موفقیت در کانال منتشر شد.")
         except Exception as e:
-            logger.error(f"Error sending message to channel: {e}")
+            logger.error(f"Error sending message to channel: {e}", exc_info=True)
             await update.message.reply_text("خطا در ارسال پیام به کانال. لطفاً با مدیر تماس بگیرید.")
     else:
         await update.message.reply_text("لطفاً یک پیام متنی یا رسانه (عکس/ویدیو) ارسال کنید.")
@@ -398,6 +447,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # --- هندلرهای مدیریتی ---
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Displays the admin panel options."""
     user_id = update.effective_user.id
     if not is_admin(user_id):
         await update.message.reply_text("شما دسترسی به پنل مدیریت ندارید.")
@@ -408,12 +458,11 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "📋 **/pending**: مشاهده و مدیریت رسانه‌های در انتظار تایید.\n"
         "👥 **/manageusers**: مدیریت کاربران (مسدود/رفع مسدودیت).\n"
         "📊 **/totalstats**: مشاهده آمار کلی ربات.\n"
-        # می‌توانید دستورات مدیریتی دیگر را اینجا اضافه کنید
     )
     await update.message.reply_text(response_text, parse_mode=ParseMode.MARKDOWN)
 
-
 async def manage_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Provides instructions for user management."""
     user_id = update.effective_user.id
     if not is_admin(user_id):
         await update.message.reply_text("شما دسترسی به این بخش ندارید.")
@@ -421,14 +470,25 @@ async def manage_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     response_text = (
         "**مدیریت کاربران:**\n"
-        "مسدود کردن کاربر: `/ban [User_ID/Alias]`\n"
-        "رفع مسدودیت کاربر: `/unban [User_ID/Alias]`\n"
-        "برای یافتن ID کاربر، می‌توانید از /mystats کاربر یا از User ID Bot استفاده کنید."
+        "مسدود کردن کاربر: `/ban [User_ID_یا_Alias]`\n"
+        "رفع مسدودیت کاربر: `/unban [User_ID_یا_Alias]`\n"
+        "برای یافتن ID کاربر، می‌توانید از /mystats کاربر یا از User ID Bot (@userinfobot) استفاده کنید."
     )
     await update.message.reply_text(response_text, parse_mode=ParseMode.MARKDOWN)
 
+async def _get_user_id_from_arg(arg: str) -> int | None:
+    """Helper to get user_id from either ID or alias."""
+    try:
+        return int(arg)
+    except ValueError:
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id FROM users WHERE alias = ?", (arg,))
+            result = cursor.fetchone()
+            return result[0] if result else None
 
 async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Bans a user by their ID or alias."""
     admin_id = update.effective_user.id
     if not is_admin(admin_id):
         await update.message.reply_text("شما دسترسی به این دستور را ندارید.")
@@ -438,23 +498,11 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text("لطفاً ID یا نام مستعار کاربری که می‌خواهید مسدود کنید را وارد کنید. مثال: /ban 123456789")
         return
 
-    target = " ".join(context.args)
-    target_user_id = None
-
-    # Try to convert to int (User ID)
-    try:
-        target_user_id = int(target)
-    except ValueError:
-        # If not an ID, try to find alias
-        with sqlite3.connect(DATABASE_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT user_id FROM users WHERE alias = ?", (target,))
-            result = cursor.fetchone()
-            if result:
-                target_user_id = result[0]
+    target_arg = " ".join(context.args)
+    target_user_id = await _get_user_id_from_arg(target_arg)
 
     if not target_user_id:
-        await update.message.reply_text(f"کاربری با ID یا نام مستعار '{target}' یافت نشد.")
+        await update.message.reply_text(f"کاربری با ID یا نام مستعار '{target_arg}' یافت نشد.")
         return
 
     if is_admin(target_user_id):
@@ -473,8 +521,8 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     ban_user(target_user_id, target_username)
     await update.message.reply_text(f"کاربر با ID: `{target_user_id}` (نام مستعار: {get_user_alias(target_user_id) or 'نامشخص'}) با موفقیت مسدود شد.", parse_mode=ParseMode.MARKDOWN)
 
-
 async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Unbans a user by their ID or alias."""
     admin_id = update.effective_user.id
     if not is_admin(admin_id):
         await update.message.reply_text("شما دسترسی به این دستور را ندارید.")
@@ -484,23 +532,11 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("لطفاً ID یا نام مستعار کاربری که می‌خواهید رفع مسدودیت کنید را وارد کنید. مثال: /unban 123456789")
         return
 
-    target = " ".join(context.args)
-    target_user_id = None
-
-    # Try to convert to int (User ID)
-    try:
-        target_user_id = int(target)
-    except ValueError:
-        # If not an ID, try to find alias
-        with sqlite3.connect(DATABASE_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT user_id FROM users WHERE alias = ?", (target,))
-            result = cursor.fetchone()
-            if result:
-                target_user_id = result[0]
+    target_arg = " ".join(context.args)
+    target_user_id = await _get_user_id_from_arg(target_arg)
 
     if not target_user_id:
-        await update.message.reply_text(f"کاربری با ID یا نام مستعار '{target}' یافت نشد.")
+        await update.message.reply_text(f"کاربری با ID یا نام مستعار '{target_arg}' یافت نشد.")
         return
 
     if unban_user(target_user_id):
@@ -508,8 +544,8 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     else:
         await update.message.reply_text("این کاربر مسدود نیست یا یافت نشد.")
 
-
 async def pending_media_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Displays pending media for admin review."""
     admin_id = update.effective_user.id
     if not is_admin(admin_id):
         await update.message.reply_text("شما دسترسی به این دستور را ندارید.")
@@ -526,27 +562,36 @@ async def pending_media_command(update: Update, context: ContextTypes.DEFAULT_TY
 
         keyboard = [
             [
-                {"text": "✅ تایید", "callback_data": f"approve_{media_id}"},
-                {"text": "❌ رد", "callback_data": f"reject_{media_id}"}
+                InlineKeyboardButton("✅ تایید", callback_data=f"approve_{media_id}"),
+                InlineKeyboardButton("❌ رد", callback_data=f"reject_{media_id}")
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        message_caption = f"رسانه در انتظار تایید (ID: {media_id})\nاز: {user_alias}\nکپشن: {caption}"
+        message_caption = f"رسانه در انتظار تایید (ID: {media_id})\nاز: {user_alias}\nکپشن: {caption if caption else 'بدون کپشن'}"
         
-        if file_type == "photo":
-            await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=message_caption, reply_markup=reply_markup)
-        elif file_type == "video":
-            await context.bot.send_video(chat_id=admin_id, video=file_id, caption=message_caption, reply_markup=reply_markup)
+        try:
+            if file_type == "photo":
+                await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=message_caption, reply_markup=reply_markup)
+            elif file_type == "video":
+                await context.bot.send_video(chat_id=admin_id, video=file_id, caption=message_caption, reply_markup=reply_markup)
+        except Exception as e:
+            logger.error(f"Failed to send pending media {media_id} to admin {admin_id}: {e}", exc_info=True)
+            await update.message.reply_text(f"خطا در نمایش رسانه {media_id} به شما: {e}")
 
-# Callback handler for pending media actions
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles callback queries from inline keyboard buttons (e.g., approve/reject media)."""
     query = update.callback_query
     await query.answer() # پاسخ به کلیک کاربر برای حذف حالت لودینگ
 
+    admin_id = query.from_user.id
+    if not is_admin(admin_id):
+        await query.edit_message_text("شما دسترسی به این عمل را ندارید.")
+        return
+
     data = query.data
-    action, media_id = data.split('_')
-    media_id = int(media_id)
+    action, media_id_str = data.split('_')
+    media_id = int(media_id_str)
 
     media_item = get_pending_media(media_id)
     if not media_item:
@@ -561,4 +606,141 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if file_type == "photo":
                 await context.bot.send_photo(chat_id=CHANNEL_ID, photo=file_id, caption=f"**{user_alias}:**\n{caption}", parse_mode=ParseMode.MARKDOWN)
             elif file_type == "video":
-                await context.bot.send_photo(chat_id=CHANNEL_ID, photo=file_id, caption=f"**{user_alias}:**\n{caption}")
+                await context.bot.send_video(chat_id=CHANNEL_ID, video=file_id, caption=f"**{user_alias}:**\n{caption}", parse_mode=ParseMode.MARKDOWN)
+            await query.edit_message_text(f"رسانه (ID: {media_id}) از {user_alias} با موفقیت تایید و منتشر شد.")
+            delete_pending_media(media_id)
+            # Notify user that their media was approved (optional)
+            try:
+                await context.bot.send_message(chat_id=user_id, text="پیام رسانه‌ای شما در کانال منتشر شد! ✅")
+            except Exception as e:
+                logger.warning(f"Could not notify user {user_id} about approved media: {e}")
+
+        except Exception as e:
+            await query.edit_message_text(f"خطا در انتشار رسانه (ID: {media_id}): {e}")
+            logger.error(f"Error publishing media {media_id}: {e}", exc_info=True)
+    elif action == "reject":
+        delete_pending_media(media_id)
+        await query.edit_message_text(f"رسانه (ID: {media_id}) از {user_alias} رد شد.")
+        # Notify user that their media was rejected (optional)
+        try:
+            await context.bot.send_message(chat_id=user_id, text="پیام رسانه‌ای شما رد شد. ❌")
+        except Exception as e:
+            logger.warning(f"Could not notify user {user_id} about rejected media: {e}")
+
+async def my_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Displays personal statistics for the user."""
+    user_id = update.effective_user.id
+    alias = get_user_alias(user_id) or "نام مستعار تنظیم نشده"
+    is_banned_status = "بله" if is_user_banned(user_id) else "خیر"
+
+    # برای شمارش دقیق تعداد پیام‌ها، باید سیستم جداگانه‌ای برای اینکار در دیتابیس پیاده‌سازی شود.
+    # به عنوان مثال، می‌توانید یک ستون message_count در جدول users اضافه کنید.
+    message_count = 0 # Placeholder for actual message count
+
+    response_text = (
+        f"**آمار شخصی شما:**\n"
+        f"شناسه کاربری: `{user_id}`\n"
+        f"نام مستعار: **{alias}**\n"
+        f"وضعیت مسدودیت: {is_banned_status}\n"
+        f"تعداد پیام‌های ارسالی (این ویژگی در حال توسعه است): {message_count}\n"
+    )
+    await update.message.reply_text(response_text, parse_mode=ParseMode.MARKDOWN)
+
+async def total_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Displays overall bot statistics for admins."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        await update.message.reply_text("شما دسترسی به این بخش را ندارید.")
+        return
+
+    total_users = get_total_users()
+    banned_users = get_banned_users_count()
+    total_messages_pending = len(get_pending_media()) # تعداد پیام‌های در انتظار
+    total_messages_published = get_total_messages() # این تابع فقط رسانه های تایید شده را برمیگرداند
+
+    response_text = (
+        "**آمار کلی ربات:**\n"
+        f"تعداد کل کاربران ثبت شده: {total_users}\n"
+        f"کاربران مسدود شده: {banned_users}\n"
+        f"رسانه‌های در انتظار تایید: {total_messages_pending}\n"
+        f"کل پیام‌های رسانه‌ای منتشر شده: {total_messages_published}\n"
+    )
+    await update.message.reply_text(response_text, parse_mode=ParseMode.MARKDOWN)
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log the error and send a traceback to the user (if admin)."""
+    logger.error("Exception while handling an update:", exc_info=context.error)
+
+    # In case of an error while handling a callback query, the update.effective_message might be None
+    # We try to send error to effective_chat or the admin who caused the error
+    if update.effective_chat:
+        message_target = update.effective_chat.id
+    elif update.effective_user:
+        message_target = update.effective_user.id
+    else:
+        message_target = None # No target to send error message
+
+    if message_target and update.effective_user and is_admin(update.effective_user.id):
+        tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+        tb_string = "".join(tb_list)
+        message = (
+            "An exception was raised while handling an update:\n"
+            f"<pre>{html.escape(tb_string)}</pre>"
+        )
+        try:
+            await context.bot.send_message(chat_id=message_target, text=message, parse_mode=ParseMode.HTML)
+        except Exception as e:
+            logger.error(f"Failed to send error message to admin {message_target}: {e}")
+    else:
+        logger.warning("Error occurred, but no effective chat/user to send notification or user is not admin.")
+
+
+# --- تابع اصلی برای راه‌اندازی ربات ---
+def main() -> None:
+    """Starts the bot."""
+    init_db()
+
+    # بررسی وجود متغیرهای محیطی حیاتی
+    if not TELEGRAM_BOT_TOKEN:
+        logger.critical("TELEGRAM_BOT_TOKEN environment variable is not set. Bot cannot start.")
+        raise ValueError("TELEGRAM_BOT_TOKEN is not set. Please set it in your environment variables.")
+    
+    if not CHANNEL_ID:
+        logger.critical("CHANNEL_ID environment variable is not set. Bot cannot start.")
+        raise ValueError("CHANNEL_ID is not set. Please set it in your environment variables.")
+
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # --- اضافه کردن هندلرها ---
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("setalias", setalias_command))
+    application.add_handler(CommandHandler("adminpanel", admin_panel))
+    application.add_handler(CommandHandler("manageusers", manage_users))
+    application.add_handler(CommandHandler("ban", ban_command))
+    application.add_handler(CommandHandler("unban", unban_command))
+    application.add_handler(CommandHandler("pending", pending_media_command))
+    application.add_handler(CommandHandler("mystats", my_stats_command))
+    application.add_handler(CommandHandler("totalstats", total_stats_command))
+
+    # هندلر برای پیام‌های متنی و رسانه
+    # filters.TEXT | filters.PHOTO | filters.VIDEO: پیام‌های متنی، عکس، و ویدیو را مدیریت می‌کند
+    # ~filters.COMMAND: پیام‌هایی که دستور نیستند (مثلاً /start)
+    application.add_handler(
+        MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO & ~filters.COMMAND, handle_message)
+    )
+
+    # هندلر برای دکمه‌های اینلاین (تایید/رد رسانه)
+    application.add_handler(CallbackQueryHandler(button_callback))
+
+    # افزودن Error Handler
+    application.add_error_handler(error_handler)
+
+    # شروع دریافت آپدیت‌ها
+    logger.info("Bot started polling...")
+    # poll_interval: فاصله زمانی بین درخواست‌های آپدیت جدید (بر حسب ثانیه)
+    # timeout: حداکثر زمانی که برای یک آپدیت منتظر می‌ماند (بر حسب ثانیه)
+    application.run_polling(poll_interval=3, timeout=30) 
+
+if __name__ == "__main__":
+    main()

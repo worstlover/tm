@@ -31,9 +31,15 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID")) # CHANNEL_ID باید عدد صحیح 
 DATABASE_PATH = os.getenv("DATABASE_PATH", "bot_database.db")
 # آدرس URL سرویس Render شما برای Keep-Alive. حتماً اینو تنظیم کنید!
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
-# آیدی کانال (به فرمت @YourChannelID) برای نمایش در پیام‌ها
+
+# آیدی کانال (به فرمت YourChannelUsername بدون @) برای نمایش در پیام‌ها
 # اگر این متغیر محیطی تنظیم نشده باشد، از یک مقدار پیش‌فرض استفاده می‌شود.
-DISPLAY_CHANNEL_ID = os.getenv("DISPLAY_CHANNEL_ID", f"@{os.getenv('CHANNEL_USERNAME', 'YourChannel')}")
+# دقت کنید که اینجا @ را اضافه نمی‌کنیم، چون در زمان نمایش در تلگرام اضافه خواهد شد.
+DISPLAY_CHANNEL_USERNAME = os.getenv("DISPLAY_CHANNEL_USERNAME", "YourChannel")
+
+# آیدی کاربر ادمین اصلی (جهت دریافت اعلان‌های سیستمی و غیره)
+# این باید یک User ID عددی باشد.
+MAIN_ADMIN_ID = int(os.getenv("MAIN_ADMIN_ID"))
 
 
 # --- تنظیمات ربات ---
@@ -508,23 +514,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 except Exception as e:
                     logger.warning(f"Could not send pending media notification to admin {admin_db_id}: {e}")
 
-            await update.message.reply_text(f"رسانه شما دریافت شد و پس از تایید مدیر در کانال {DISPLAY_CHANNEL_ID} منتشر خواهد شد.")
+            await update.message.reply_text(f"رسانه شما دریافت شد و پس از تایید مدیر در کانال @{DISPLAY_CHANNEL_USERNAME} منتشر خواهد شد.")
         else:
             await update.message.reply_text("خطا در دریافت رسانه.")
 
     # --- مدیریت پیام متنی ---
     elif message_text:
         try:
-            # اضافه کردن DISPLAY_CHANNEL_ID به انتهای پیام متنی
-            final_text = f"**{user_alias}:**\n{message_text}\n\n{DISPLAY_CHANNEL_ID}"
+            # اضافه کردن DISPLAY_CHANNEL_USERNAME به انتهای پیام متنی با یک @
+            final_text = f"**{user_alias}:**\n{message_text}\n\n@{DISPLAY_CHANNEL_USERNAME}"
             await context.bot.send_message(
                 chat_id=CHANNEL_ID,
                 text=final_text,
                 parse_mode=ParseMode.MARKDOWN
             )
-            await update.message.reply_text(f"پیام شما با موفقیت در کانال {DISPLAY_CHANNEL_ID} منتشر شد.")
+            await update.message.reply_text(f"پیام شما با موفقیت در کانال @{DISPLAY_CHANNEL_USERNAME} منتشر شد.")
         except Exception as e:
             logger.error(f"Error sending message to channel: {e}", exc_info=True)
+            # ارسال پیام خطا به ادمین اصلی
+            if MAIN_ADMIN_ID:
+                try:
+                    await context.bot.send_message(chat_id=MAIN_ADMIN_ID, text=f"خطا در ارسال پیام به کانال:\n{e}\n\nپیام از کاربر: `{user_id}` (`{user_alias}`)\n\nمتن: {message_text}")
+                except Exception as admin_e:
+                    logger.error(f"Could not notify main admin about channel message error: {admin_e}")
+
             await update.message.reply_text("خطا در ارسال پیام به کانال. لطفاً با مدیر تماس بگیرید.")
     else:
         await update.message.reply_text("لطفاً یک پیام متنی یا رسانه (عکس/ویدیو) ارسال کنید.")
@@ -718,8 +731,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if action == "approve":
         try:
-            # اضافه کردن DISPLAY_CHANNEL_ID به انتهای کپشن در کانال
-            final_caption = f"**{user_alias}:**\n{caption}\n\n{DISPLAY_CHANNEL_ID}"
+            # اضافه کردن DISPLAY_CHANNEL_USERNAME به انتهای کپشن در کانال با یک @
+            final_caption = f"**{user_alias}:**\n{caption}\n\n@{DISPLAY_CHANNEL_USERNAME}"
             if file_type == "photo":
                 await context.bot.send_photo(chat_id=CHANNEL_ID, photo=file_id, caption=final_caption, parse_mode=ParseMode.MARKDOWN)
             elif file_type == "video":
@@ -729,19 +742,26 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             delete_pending_media(media_id)
             # Notify user that their media was approved (optional)
             try:
-                await context.bot.send_message(chat_id=user_id, text=f"پیام رسانه‌ای شما در کانال {DISPLAY_CHANNEL_ID} منتشر شد! ✅")
+                await context.bot.send_message(chat_id=user_id, text=f"پیام رسانه‌ای شما در کانال @{DISPLAY_CHANNEL_USERNAME} منتشر شد! ✅")
             except Exception as e:
                 logger.warning(f"Could not notify user {user_id} about approved media: {e}")
 
         except Exception as e:
             await query.edit_message_text(f"خطا در انتشار رسانه (ID: {media_id}): {e}")
             logger.error(f"Error publishing media {media_id}: {e}", exc_info=True)
+            # ارسال پیام خطا به ادمین اصلی
+            if MAIN_ADMIN_ID:
+                try:
+                    await context.bot.send_message(chat_id=MAIN_ADMIN_ID, text=f"خطا در انتشار رسانه (ID: {media_id}) از کاربر: `{user_id}` (`{user_alias}`)\n\n{e}")
+                except Exception as admin_e:
+                    logger.error(f"Could not notify main admin about media publishing error: {admin_e}")
+
     elif action == "reject":
         delete_pending_media(media_id)
         await query.edit_message_text(f"رسانه (ID: {media_id}) از {user_alias} رد شد.")
         # Notify user that their media was rejected (optional)
         try:
-            await context.bot.send_message(chat_id=user_id, text=f"پیام رسانه‌ای شما رد شد. ❌ به کانال {DISPLAY_CHANNEL_ID} ارسال نشد.")
+            await context.bot.send_message(chat_id=user_id, text=f"پیام رسانه‌ای شما رد شد. ❌ به کانال @{DISPLAY_CHANNEL_USERNAME} ارسال نشد.")
         except Exception as e:
             logger.warning(f"Could not notify user {user_id} about rejected media: {e}")
 
@@ -789,14 +809,8 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Log the error and send a traceback to the user (if admin)."""
     logger.error("Exception while handling an update:", exc_info=context.error)
 
-    # Determine target for error message
-    message_target = None
-    if update.effective_user and is_admin(update.effective_user.id):
-        message_target = update.effective_user.id
-    elif update.effective_chat:
-        message_target = update.effective_chat.id
-
-    if message_target:
+    # ارسال traceback به ادمین اصلی
+    if MAIN_ADMIN_ID:
         tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
         tb_string = "".join(tb_list)
         message = (
@@ -804,9 +818,24 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"<pre>{html.escape(tb_string)}</pre>"
         )
         try:
-            await context.bot.send_message(chat_id=message_target, text=message, parse_mode=ParseMode.HTML)
+            await context.bot.send_message(chat_id=MAIN_ADMIN_ID, text=message, parse_mode=ParseMode.HTML)
         except Exception as e:
-            logger.error(f"Failed to send error message to {message_target}: {e}")
+            logger.error(f"Failed to send error message to main admin {MAIN_ADMIN_ID}: {e}")
+    else:
+        logger.warning("MAIN_ADMIN_ID is not set, could not send error traceback.")
+
+    # Determine target for error message for user
+    message_target = None
+    if update.effective_user and is_admin(update.effective_user.id):
+        message_target = update.effective_user.id
+    elif update.effective_chat:
+        message_target = update.effective_chat.id
+
+    if message_target and message_target != MAIN_ADMIN_ID: # اگر خودش ادمین اصلی نبود بهش یک پیام عمومی بده
+        try:
+            await context.bot.send_message(chat_id=message_target, text="خطایی در سیستم رخ داده است. مدیران ربات در جریان قرار گرفتند. لطفاً بعداً تلاش کنید.")
+        except Exception as e:
+            logger.error(f"Failed to send generic error message to {message_target}: {e}")
     else:
         logger.warning("Error occurred, but no effective chat/user to send notification.")
 
@@ -843,6 +872,10 @@ def main() -> None:
     if not CHANNEL_ID:
         logger.critical("CHANNEL_ID environment variable is not set. Bot cannot start.")
         raise ValueError("CHANNEL_ID is not set. Please set it in your environment variables.")
+
+    if not MAIN_ADMIN_ID:
+        logger.critical("MAIN_ADMIN_ID environment variable is not set. Critical errors will not be reported to a specific admin.")
+        # نیازی به raise ValueError نیست، چون ربات بدون ادمین اصلی هم می‌تونه کار کنه ولی با قابلیت‌های محدودتر
 
     # شروع Keep-Alive در یک ترد جداگانه
     if RENDER_EXTERNAL_URL:

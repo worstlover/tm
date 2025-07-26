@@ -561,4 +561,4 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if file_type == "photo":
                 await context.bot.send_photo(chat_id=CHANNEL_ID, photo=file_id, caption=f"**{user_alias}:**\n{caption}", parse_mode=ParseMode.MARKDOWN)
             elif file_type == "video":
-                await context.bot.send_video(chat_id=CHANNEL_ID, video=file_id, caption=f"**{user_alias}:**\n{caption
+                await context.bot.send_photo(chat_id=CHANNEL_ID, photo=file_id, caption=f"**{user_alias}:**\n{caption}")

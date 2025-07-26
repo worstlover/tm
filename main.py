@@ -31,14 +31,18 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID")) # CHANNEL_ID باید عدد صحیح 
 DATABASE_PATH = os.getenv("DATABASE_PATH", "bot_database.db")
 # آدرس URL سرویس Render شما برای Keep-Alive. حتماً اینو تنظیم کنید!
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
+# آیدی کانال (به فرمت @YourChannelID) برای نمایش در پیام‌ها
+# اگر این متغیر محیطی تنظیم نشده باشد، از یک مقدار پیش‌فرض استفاده می‌شود.
+DISPLAY_CHANNEL_ID = os.getenv("DISPLAY_CHANNEL_ID", f"@{os.getenv('CHANNEL_USERNAME', 'YourChannel')}")
+
 
 # --- تنظیمات ربات ---
 MESSAGE_INTERVAL = timedelta(minutes=2)  # محدودیت 2 دقیقه بین پیام‌ها
 WORKING_HOURS_START = 8  # 8 صبح (ساعت 8:00)
 WORKING_HOURS_END = 22  # 10 شب (ساعت 22:00)
 
-# --- وضعیت کاربران برای مکالمات (مثل تنظیم نام مستعار) ---
-USER_STATE = {} # {user_id: "waiting_for_alias"}
+# --- وضعیت کاربران برای مکالمات ---
+USER_STATE = {} # {user_id: "waiting_for_alias" | "waiting_for_channel_message"}
 
 # --- لیست کلمات ممنوعه فارسی (شما می‌توانید این لیست را گسترش دهید) ---
 FORBIDDEN_WORDS = [
@@ -235,7 +239,7 @@ def get_total_users() -> int:
 def get_banned_users_count() -> int:
     """Gets the count of banned users."""
     with sqlite3.connect(DATABASE_PATH) as conn:
-        cursor = conn.conn()
+        cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
         return cursor.fetchone()[0]
 
@@ -275,11 +279,15 @@ def contains_forbidden_words(text: str) -> bool:
 async def get_main_reply_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     """Generates the main reply keyboard based on user's status."""
     keyboard_buttons = []
+    
+    # دکمه "ارسال پیام" همیشه باید باشه تا کاربر بتونه شروع به ارسال کنه
+    keyboard_buttons.append([KeyboardButton("📝 ارسال پیام")])
+
     if get_user_alias(user_id):
         # User has an alias
         keyboard_buttons.append([KeyboardButton("📊 آمار من"), KeyboardButton("ℹ️ راهنما")])
     else:
-        # User needs to set an alias
+        # User needs to set an alias - should ideally be handled at start/first message
         keyboard_buttons.append([KeyboardButton("👤 تنظیم نام مستعار"), KeyboardButton("ℹ️ راهنما")])
 
     if is_admin(user_id):
@@ -306,10 +314,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     if alias:
         message += f"نام مستعار فعلی شما: **{alias}**\n"
-        message += "برای ارسال پیام متنی، کافیست پیام خود را برای من ارسال کنید."
+        message += "برای ارسال پیام متنی یا رسانه، لطفاً روی دکمه **📝 ارسال پیام** کلیک کنید."
     else:
         message += "برای شروع، ابتدا باید یک نام مستعار برای خود انتخاب کنید.\n"
-        message += "لطفاً روی دکمه **تنظیم نام مستعار** کلیک کنید."
+        message += "لطفاً روی دکمه **👤 تنظیم نام مستعار** کلیک کنید."
 
     reply_markup = await get_main_reply_keyboard(user_id)
     await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
@@ -320,8 +328,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     response_text = (
         "راهنمای استفاده از ربات مدیریت کانال ناشناس:\n\n"
         "**دستورات کاربری:**\n"
-        "📝 **ارسال پیام:** کافیست پیام متنی یا رسانه خود (عکس/ویدیو) را برای من ارسال کنید.\n"
-        "👤 *تنظیم نام مستعار*: برای تنظیم یا مشاهده نام مستعار.\n" 
+        "📝 *ارسال پیام*: برای شروع ارسال پیام یا رسانه به کانال.\n" 
+        "👤 *تنظیم نام مستعار*: برای تنظیم یا مشاهده نام مستعار (فقط برای بار اول).\n" 
         "📊 *آمار من*: مشاهده آمار شخصی.\n"
         "ℹ️ *راهنما*: نمایش این راهنما.\n\n"
     )
@@ -344,18 +352,41 @@ async def set_alias_button_handler(update: Update, context: ContextTypes.DEFAULT
     current_alias = get_user_alias(user_id)
     if current_alias:
         await update.message.reply_text(f"شما قبلاً نام مستعار **{current_alias}** را انتخاب کرده‌اید. در صورت نیاز به تغییر، با مدیران تماس بگیرید.", parse_mode=ParseMode.MARKDOWN)
+        # پاک کردن حالت اگر کاربر دکمه رو الکی زده
+        if USER_STATE.get(user_id) == "waiting_for_alias":
+            del USER_STATE[user_id]
+            reply_markup = await get_main_reply_keyboard(user_id)
+            await update.message.reply_text("منوی اصلی:", reply_markup=reply_markup) # بازگشت به منوی اصلی
     else:
         USER_STATE[user_id] = "waiting_for_alias"
         await update.message.reply_text("لطفاً **نام مستعار** مورد نظر خود را در پیام بعدی *ارسال* کنید:")
 
+async def request_send_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles the 'ارسال پیام' button click."""
+    user_id = update.effective_user.id
+    user_alias = get_user_alias(user_id)
+
+    if is_user_banned(user_id):
+        await update.message.reply_text("شما از ارسال پیام مسدود شده‌اید.")
+        return
+
+    if not user_alias:
+        await update.message.reply_text("برای ارسال پیام، ابتدا باید با دستور /setalias یا دکمه **تنظیم نام مستعار** نام مستعار خود را تنظیم کنید.")
+        return
+
+    USER_STATE[user_id] = "waiting_for_channel_message"
+    await update.message.reply_text("حالا پیام متنی یا رسانه (عکس/ویدیو) خود را برای ارسال به کانال بفرستید. برای لغو /cancel را ارسال کنید.")
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles incoming text messages and media."""
+    """Handles incoming text messages and media based on user's state."""
     user_id = update.effective_user.id
     user_username = update.effective_user.username or f"id_{user_id}"
     user_alias = get_user_alias(user_id)
+    current_state = USER_STATE.get(user_id)
 
     # --- بررسی وضعیت کاربر برای setalias ---
-    if USER_STATE.get(user_id) == "waiting_for_alias" and update.message.text:
+    if current_state == "waiting_for_alias" and update.message.text:
         new_alias = update.message.text.strip()
         if not new_alias:
             await update.message.reply_text("نام مستعار نمی‌تواند خالی باشد. لطفاً یک نام معتبر وارد کنید.")
@@ -369,26 +400,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
         
         if set_user_alias(user_id, username=user_username, alias=new_alias):
-            await update.message.reply_text(f"نام مستعار شما با موفقیت به **{new_alias}** تنظیم شد. می‌توانید پیام‌های خود را ارسال کنید.", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(f"نام مستعار شما با موفقیت به **{new_alias}** تنظیم شد.")
             del USER_STATE[user_id] # وضعیت را ریست می‌کنیم
             reply_markup = await get_main_reply_keyboard(user_id)
-            await update.message.reply_text("منوی اصلی:", reply_markup=reply_markup) # نمایش کیبورد اصلی
+            await update.message.reply_text("به منوی اصلی بازگشتید:", reply_markup=reply_markup) # نمایش کیبورد اصلی و پیام نهایی
         else:
             await update.message.reply_text("این نام مستعار قبلاً استفاده شده است. لطفاً نام دیگری انتخاب کنید.")
             # وضعیت را همچنان در waiting_for_alias نگه می‌داریم تا کاربر دوباره نام مستعار بدهد
         return # مهم: از تابع خارج می‌شویم تا به بقیه handle_message نرویم
 
-    # --- بررسی شرایط ارسال پیام ---
+    # --- فقط در صورتی که کاربر در حالت 'waiting_for_channel_message' باشد پیام را پردازش کن ---
+    if current_state != "waiting_for_channel_message":
+        # اگر پیام یک دکمه یا دستور شناخته شده نیست، به کاربر اطلاع بده
+        if update.message.text and not update.message.text.startswith('/') and \
+           not (update.message.text in ["📝 ارسال پیام", "👤 تنظیم نام مستعار", "📊 آمار من", "ℹ️ راهنما", "⚙️ پنل مدیریت", "📋 پیام‌های در انتظار", "👥 مدیریت کاربران", "📊 آمار کل", "🔙 بازگشت به منوی اصلی"]):
+            await update.message.reply_text("لطفاً از دکمه‌های موجود در منوی اصلی استفاده کنید تا اقدام مورد نظر خود را انجام دهید.")
+            reply_markup = await get_main_reply_keyboard(user_id)
+            await update.message.reply_text("منوی اصلی:", reply_markup=reply_markup)
+        return
+
+    # --- بررسی شرایط ارسال پیام (فقط وقتی در حالت 'waiting_for_channel_message' هستیم) ---
     if not is_working_hours() and not is_admin(user_id):
         await update.message.reply_text(f"متاسفانه ربات فقط در ساعات کاری ({WORKING_HOURS_START}:00 تا {WORKING_HOURS_END}:00) فعال است.")
+        del USER_STATE[user_id] # پاک کردن حالت
+        reply_markup = await get_main_reply_keyboard(user_id)
+        await update.message.reply_text("به منوی اصلی بازگشتید:", reply_markup=reply_markup)
         return
 
     if is_user_banned(user_id):
         await update.message.reply_text("شما از ارسال پیام مسدود شده‌اید.")
+        del USER_STATE[user_id] # پاک کردن حالت
+        reply_markup = await get_main_reply_keyboard(user_id)
+        await update.message.reply_text("به منوی اصلی بازگشتید:", reply_markup=reply_markup)
         return
 
     if not user_alias:
         await update.message.reply_text("لطفاً ابتدا با دستور /setalias یا دکمه **تنظیم نام مستعار** نام مستعار خود را تنظیم کنید.")
+        del USER_STATE[user_id] # پاک کردن حالت
+        reply_markup = await get_main_reply_keyboard(user_id)
+        await update.message.reply_text("به منوی اصلی بازگشتید:", reply_markup=reply_markup)
         return
 
     last_time = get_last_message_time(user_id)
@@ -397,6 +447,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         minutes = int(remaining_time.total_seconds() // 60)
         seconds = int(remaining_time.total_seconds() % 60)
         await update.message.reply_text(f"لطفاً صبر کنید. شما می‌توانید هر {int(MESSAGE_INTERVAL.total_seconds() // 60)} دقیقه یک پیام ارسال کنید. زمان باقی‌مانده: {minutes} دقیقه و {seconds} ثانیه.")
+        # نیازی به حذف state نیست، کاربر همچنان در حال ارسال پیام است
         return
 
     message_text = update.message.text
@@ -404,10 +455,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # --- فیلتر کلمات ممنوعه ---
     if message_text and contains_forbidden_words(message_text):
-        await update.message.reply_text("پیام شما حاوی کلمات ممنوعه است و ارسال نخواهد شد.")
+        await update.message.reply_text("پیام شما حاوی کلمات ممنوعه است و ارسال نخواهد شد. عملیات لغو شد.")
+        del USER_STATE[user_id] # پاک کردن حالت
+        reply_markup = await get_main_reply_keyboard(user_id)
+        await update.message.reply_text("به منوی اصلی بازگشتید:", reply_markup=reply_markup)
         return
     if caption_text and contains_forbidden_words(caption_text):
-        await update.message.reply_text("کپشن شما حاوی کلمات ممنوعه است و رسانه شما تایید نخواهد شد.")
+        await update.message.reply_text("کپشن شما حاوی کلمات ممنوعه است و رسانه شما تایید نخواهد شد. عملیات لغو شد.")
+        del USER_STATE[user_id] # پاک کردن حالت
+        reply_markup = await get_main_reply_keyboard(user_id)
+        await update.message.reply_text("به منوی اصلی بازگشتید:", reply_markup=reply_markup)
         return
 
     # --- به‌روزرسانی زمان آخرین پیام ---
@@ -451,24 +508,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 except Exception as e:
                     logger.warning(f"Could not send pending media notification to admin {admin_db_id}: {e}")
 
-            await update.message.reply_text("رسانه شما دریافت شد و پس از تایید مدیر در کانال منتشر خواهد شود.")
+            await update.message.reply_text(f"رسانه شما دریافت شد و پس از تایید مدیر در کانال {DISPLAY_CHANNEL_ID} منتشر خواهد شد.")
         else:
             await update.message.reply_text("خطا در دریافت رسانه.")
 
     # --- مدیریت پیام متنی ---
     elif message_text:
         try:
+            # اضافه کردن DISPLAY_CHANNEL_ID به انتهای پیام متنی
+            final_text = f"**{user_alias}:**\n{message_text}\n\n{DISPLAY_CHANNEL_ID}"
             await context.bot.send_message(
                 chat_id=CHANNEL_ID,
-                text=f"**{user_alias}:**\n{message_text}",
+                text=final_text,
                 parse_mode=ParseMode.MARKDOWN
             )
-            await update.message.reply_text("پیام شما با موفقیت در کانال منتشر شد.")
+            await update.message.reply_text(f"پیام شما با موفقیت در کانال {DISPLAY_CHANNEL_ID} منتشر شد.")
         except Exception as e:
             logger.error(f"Error sending message to channel: {e}", exc_info=True)
             await update.message.reply_text("خطا در ارسال پیام به کانال. لطفاً با مدیر تماس بگیرید.")
     else:
         await update.message.reply_text("لطفاً یک پیام متنی یا رسانه (عکس/ویدیو) ارسال کنید.")
+    
+    # بعد از هر ارسال موفق یا ناموفق پیام، وضعیت کاربر را به حالت عادی برگردان
+    del USER_STATE[user_id]
+    reply_markup = await get_main_reply_keyboard(user_id)
+    await update.message.reply_text("به منوی اصلی بازگشتید:", reply_markup=reply_markup)
+
+
+async def cancel_operation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Cancels any ongoing operation (like waiting for message to channel)."""
+    user_id = update.effective_user.id
+    if user_id in USER_STATE:
+        del USER_STATE[user_id]
+        await update.message.reply_text("عملیات لغو شد.")
+    else:
+        await update.message.reply_text("هیچ عملیاتی برای لغو وجود ندارد.")
+    
+    reply_markup = await get_main_reply_keyboard(user_id)
+    await update.message.reply_text("به منوی اصلی بازگشتید:", reply_markup=reply_markup)
 
 
 # --- هندلرهای مدیریتی ---
@@ -479,6 +556,10 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text("شما دسترسی به پنل مدیریت ندارید.")
         return
 
+    # هر حالت فعلی کاربر رو پاک کن قبل از ورود به پنل ادمین
+    if user_id in USER_STATE:
+        del USER_STATE[user_id]
+
     response_text = "**پنل مدیریت:**"
     reply_markup = await get_admin_reply_keyboard()
     await update.message.reply_text(response_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
@@ -487,6 +568,10 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Returns to the main menu from admin panel."""
     user_id = update.effective_user.id
+    # هر حالت فعلی کاربر رو پاک کن
+    if user_id in USER_STATE:
+        del USER_STATE[user_id]
+        
     reply_markup = await get_main_reply_keyboard(user_id)
     await update.message.reply_text("به منوی اصلی بازگشتید.", reply_markup=reply_markup)
 
@@ -633,15 +718,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if action == "approve":
         try:
+            # اضافه کردن DISPLAY_CHANNEL_ID به انتهای کپشن در کانال
+            final_caption = f"**{user_alias}:**\n{caption}\n\n{DISPLAY_CHANNEL_ID}"
             if file_type == "photo":
-                await context.bot.send_photo(chat_id=CHANNEL_ID, photo=file_id, caption=f"**{user_alias}:**\n{caption}", parse_mode=ParseMode.MARKDOWN)
+                await context.bot.send_photo(chat_id=CHANNEL_ID, photo=file_id, caption=final_caption, parse_mode=ParseMode.MARKDOWN)
             elif file_type == "video":
-                await context.bot.send_video(chat_id=CHANNEL_ID, video=file_id, caption=f"**{user_alias}:**\n{caption}", parse_mode=ParseMode.MARKDOWN)
+                await context.bot.send_video(chat_id=CHANNEL_ID, video=file_id, caption=final_caption, parse_mode=ParseMode.MARKDOWN)
+            
             await query.edit_message_text(f"رسانه (ID: {media_id}) از {user_alias} با موفقیت تایید و منتشر شد.")
             delete_pending_media(media_id)
             # Notify user that their media was approved (optional)
             try:
-                await context.bot.send_message(chat_id=user_id, text="پیام رسانه‌ای شما در کانال منتشر شد! ✅")
+                await context.bot.send_message(chat_id=user_id, text=f"پیام رسانه‌ای شما در کانال {DISPLAY_CHANNEL_ID} منتشر شد! ✅")
             except Exception as e:
                 logger.warning(f"Could not notify user {user_id} about approved media: {e}")
 
@@ -653,7 +741,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text(f"رسانه (ID: {media_id}) از {user_alias} رد شد.")
         # Notify user that their media was rejected (optional)
         try:
-            await context.bot.send_message(chat_id=user_id, text="پیام رسانه‌ای شما رد شد. ❌")
+            await context.bot.send_message(chat_id=user_id, text=f"پیام رسانه‌ای شما رد شد. ❌ به کانال {DISPLAY_CHANNEL_ID} ارسال نشد.")
         except Exception as e:
             logger.warning(f"Could not notify user {user_id} about rejected media: {e}")
 
@@ -771,6 +859,7 @@ def main() -> None:
     # --- اضافه کردن هندلرها ---
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("cancel", cancel_operation)) # دستور /cancel برای لغو عملیات
     # این CommandHandler برای /setalias سنتی است، میتونید حذفش کنید اگر فقط دکمه رو میخواید
     application.add_handler(CommandHandler("setalias", set_alias_button_handler)) 
 
@@ -778,7 +867,8 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.Regex("^👤 تنظیم نام مستعار$") & ~filters.COMMAND, set_alias_button_handler))
     application.add_handler(MessageHandler(filters.Regex("^📊 آمار من$") & ~filters.COMMAND, my_stats_command))
     application.add_handler(MessageHandler(filters.Regex("^ℹ️ راهنما$") & ~filters.COMMAND, help_command))
-    # اینجا از فیلتر کاستوم IS_ADMIN_FILTER استفاده شده
+    application.add_handler(MessageHandler(filters.Regex("^📝 ارسال پیام$") & ~filters.COMMAND, request_send_message)) # هندلر جدید برای دکمه "ارسال پیام"
+
     application.add_handler(MessageHandler(filters.Regex("^⚙️ پنل مدیریت$") & ~filters.COMMAND & IS_ADMIN_FILTER, admin_panel))
     application.add_handler(MessageHandler(filters.Regex("^📋 پیام‌های در انتظار$") & ~filters.COMMAND & IS_ADMIN_FILTER, pending_media_command))
     application.add_handler(MessageHandler(filters.Regex("^👥 مدیریت کاربران$") & ~filters.COMMAND & IS_ADMIN_FILTER, manage_users))
@@ -795,8 +885,7 @@ def main() -> None:
     application.add_handler(CommandHandler("mystats", my_stats_command)) # این برای همه کاربرانه
     application.add_handler(CommandHandler("totalstats", total_stats_command, filters=IS_ADMIN_FILTER))
 
-    # هندلر اصلی برای پیام‌های متنی و رسانه
-    # این هندلر تمام پیام‌هایی که دستور نیستند را مدیریت می‌کند
+    # هندلر اصلی برای پیام‌های متنی و رسانه: این حالا فقط پیام‌های وقتی کاربر در حالت خاصی است را می‌گیرد
     application.add_handler(
         MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO & ~filters.COMMAND, handle_message)
     )

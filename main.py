@@ -3,8 +3,11 @@ import sqlite3
 import logging
 import traceback
 import html
+import threading
+import time
+import requests # برای ارسال درخواست HTTP در Keep-Alive
 from datetime import datetime, timedelta
-from telegram import Update, Bot, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -19,23 +22,23 @@ from telegram.constants import ParseMode
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
-# کاهش سطح لاگ برای کتابخانه httpx که معمولاً زیاد پیام می‌دهد
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # --- متغیرهای محیطی ---
-# مطمئن شوید که این متغیرها در Render یا لوکال تنظیم شده‌اند
-# TELEGRAM_BOT_TOKEN: توکن ربات شما از BotFather
-# CHANNEL_ID: شناسه عددی کانال شما (مثلا -100123456789)
-# DATABASE_PATH: مسیر فایل دیتابیس (در Render معمولا /opt/render/project/src/bot_database.db)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) # CHANNEL_ID باید عدد صحیح باشد
-DATABASE_PATH = os.getenv("DATABASE_PATH", "bot_database.db") # مسیر پیش فرض برای لوکال
+DATABASE_PATH = os.getenv("DATABASE_PATH", "bot_database.db")
+# آدرس URL سرویس Render شما برای Keep-Alive. حتماً اینو تنظیم کنید!
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 
 # --- تنظیمات ربات ---
 MESSAGE_INTERVAL = timedelta(minutes=2)  # محدودیت 2 دقیقه بین پیام‌ها
 WORKING_HOURS_START = 8  # 8 صبح (ساعت 8:00)
 WORKING_HOURS_END = 22  # 10 شب (ساعت 22:00)
+
+# --- وضعیت کاربران برای مکالمات (مثل تنظیم نام مستعار) ---
+USER_STATE = {} # {user_id: "waiting_for_alias"}
 
 # --- لیست کلمات ممنوعه فارسی (شما می‌توانید این لیست را گسترش دهید) ---
 FORBIDDEN_WORDS = [
@@ -79,25 +82,21 @@ FORBIDDEN_WORDS = [
     "نافرمان", "عصیانگر", "سرکش", "متجاوز", "هتاک", "اهانت‌آمیز", "افتراآمیز",
     "زننده", "نکوهیده", "مذموم", "مورد_انتقاد", "منفی", "خرابکار", "اخلالگر",
     "ویرانگر", "مخرب", "آسیب‌رسان", "زیانبار", "مهلک", "کشنده", "مرگبار", "کشنده",
-    "سمی", "آلوده", "مضر", "خطرناک", "وحشتناک", "ترسناک", "مخوف", "وحشتزا",
-    "ترس‌انگیز", "ناامن", "پرخطر", "تهدیدآمیز", "آسیب‌پذیر", "بی‌دفاع", "ضعیف",
-    "ناتوان", "عاجز", "بیچاره", "مفلوک", "تیره_روز", "بدبخت", "مصیبت‌زده",
-    "فاجعه‌آور", "غم‌انگیز", "حزن‌آور", "اندوهبار", "دلخراش", "دردناک", "زجرآور",
-    "شکنجه‌آور", "طاقت‌فرسا", "جانکاه", "پایان‌دهنده", "ویران‌کننده", "تباه‌کننده",
-    "نابودکننده", "فناکننده", "مخرب", "شوم", "نحس", "بدشگون", "تاریک", "سیاه",
-    "تیره", "عبوس", "غمبار", "اندوهگین", "مغموم", "افسرده", "افسرده‌کننده",
-    "نومید", "مایوس", "مأیوس‌کننده", "دلگیر", "دلتنگ", "بی‌قرار", "بی‌تاب",
-    "غمزده", "مصیبت_بار", "بحرانی", "خطرناک", "مهلک", "مرگبار", "کثیف", "زشت",
-    "نامطبوع", "منزجرکننده", "حال_به_هم_زن", "غیر_قابل_تحمل", "فاسد", "خراب",
-    "ناپاک", "نجس", "پلید", "کثیف", "چسبناک", "بودار", "گندیده", "پوسیده",
-    "خراب_شده", "از_بین_رفته", "نابود_شده", "ویران_شده", "سوخته", "مخروبه",
-    "داغون", "شلخته", "نامرتب", "کثیف", "بی‌نظم", "پریشان", "آشفته", "سردرگم",
-    "بی‌هدف", "بی‌جهت", "بی‌فایده", "بیهوده", "پوچ", "خالی", "تهی", "بی‌ارزش",
-    "بی‌اهمیت", "بی‌معنی", "مزخرف", "چرند", "پرت_و_پلا", "خزعبل", "بی‌خود",
-    "مزخرف‌گو", "چرند_گو", "بیهوده_گو", "پر_حرف", "زیاده_گو", "ناشی", "غیر_حرفه‌ای",
-    "آماتور", "بی‌تجربه", "کند", "تنبل", "بی‌حال", "بی‌تفاوت", "سرد", "بی‌احساس",
-    "بی‌روح", "خالی_ذهن", "احمق", "کندذهن", "کم‌هوش", "ابله", "نفهم", "نادان",
-    "بی‌سواد", "جاهل", "غیر_منطقی", "بی‌منطق", "غیرهوشمند", "نابخرد", "نادان_بزرگ"
+    "سمی", "آلوده", "مضر", "خطرناک", "وحشتناک", "ترسناک", "مهیب", "کابوس", "فاجعه",
+    "غم‌انگیز", "تلخ", "دردناک", "شوم", "نحس", "بدشگون", "تاریک", "سیاه", "تیره",
+    "عبوس", "غمبار", "اندوهگین", "مغموم", "افسرده", "افسرده‌کننده", "نومید", "مایوس",
+    "مأیوس‌کننده", "دلگیر", "دلتنگ", "بی‌قرار", "بی‌تاب", "غمزده", "مصیبت_بار",
+    "بحرانی", "خطرناک", "مهلک", "مرگبار", "کثیف", "زشت", "نامطبوع", "منزجرکننده",
+    "حال_به_هم_زن", "غیر_قابل_تحمل", "فاسد", "خراب", "ناپاک", "نجس", "پلید", "کثیف",
+    "چسبناک", "بودار", "گندیده", "پوسیده", "خراب_شده", "از_بین_رفته", "نابود_شده",
+    "ویران_شده", "سوخته", "مخروبه", "داغون", "شلخته", "نامرتب", "کثیف", "بی‌نظم",
+    "پریشان", "آشفته", "سردرگم", "بی‌هدف", "بی‌جهت", "بی‌فایده", "بیهوده", "پوچ",
+    "خالی", "تهی", "بی‌ارزش", "بی‌اهمیت", "بی‌معنی", "مزخرف", "چرند", "پرت_و_پلا",
+    "خزعبل", "بی‌خود", "مزخرف‌گو", "چرند_گو", "بیهوده_گو", "پر_حرف", "زیاده_گو",
+    "ناشی", "غیر_حرفه‌ای", "آماتور", "بی‌تجربه", "کند", "تنبل", "بی‌حال", "بی‌تفاوت",
+    "سرد", "بی‌احساس", "بی‌روح", "خالی_ذهن", "احمق", "کندذهن", "کم‌هوش", "ابله",
+    "نفهم", "نادان", "بی‌سواد", "جاهل", "غیر_منطقی", "بی‌منطق", "غیرهوشمند",
+    "نابخرد", "نادان_بزرگ"
 ]
 
 # --- توابع پایگاه داده (SQLite) ---
@@ -253,11 +252,16 @@ def get_banned_users_count() -> int:
         cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
         return cursor.fetchone()[0]
 
-def get_total_messages() -> int:
-    """Gets the total count of messages (from pending_media table)."""
+def get_total_messages_published() -> int:
+    """Gets the total count of messages (from pending_media table, assuming once approved, they are counted).
+    NOTE: This is a placeholder. For actual count of *published* messages,
+    you would need a separate table or a 'status' column in pending_media
+    to differentiate between pending, approved, and rejected.
+    Here, it simply counts all entries in pending_media.
+    """
     with sqlite3.connect(DATABASE_PATH) as conn:
-        cursor = conn.conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM pending_media")
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM pending_media") # Adjust if you have a "published" status
         return cursor.fetchone()[0]
 
 
@@ -281,76 +285,111 @@ def contains_forbidden_words(text: str) -> bool:
 
 # --- هندلرهای ربات (Async Functions - برای سازگاری با Python-Telegram-Bot v20+) ---
 
+async def get_main_reply_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    """Generates the main reply keyboard based on user's status."""
+    keyboard_buttons = []
+    if get_user_alias(user_id):
+        # User has an alias
+        keyboard_buttons.append([KeyboardButton("📊 آمار من"), KeyboardButton("ℹ️ راهنما")])
+    else:
+        # User needs to set an alias
+        keyboard_buttons.append([KeyboardButton("👤 تنظیم نام مستعار"), KeyboardButton("ℹ️ راهنما")])
+
+    if is_admin(user_id):
+        keyboard_buttons.append([KeyboardButton("⚙️ پنل مدیریت")])
+
+    return ReplyKeyboardMarkup(keyboard_buttons, resize_keyboard=True, one_time_keyboard=False)
+
+async def get_admin_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Generates the admin reply keyboard."""
+    keyboard_buttons = [
+        [KeyboardButton("📋 پیام‌های در انتظار"), KeyboardButton("👥 مدیریت کاربران")],
+        [KeyboardButton("📊 آمار کل"), KeyboardButton("🔙 بازگشت به منوی اصلی")]
+    ]
+    return ReplyKeyboardMarkup(keyboard_buttons, resize_keyboard=True, one_time_keyboard=False)
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sends a welcome message and prompts user to set alias."""
+    """Sends a welcome message and prompts user to set alias with reply keyboard."""
     user_id = update.effective_user.id
     alias = get_user_alias(user_id)
     message = (
         "به ربات مدیریت کانال ناشناس خوش آمدید! 👋\n"
         "این ربات به شما امکان می‌دهد پیام‌ها و رسانه‌ها را به صورت ناشناس در کانال ارسال کنید.\n\n"
     )
+    
     if alias:
         message += f"نام مستعار فعلی شما: **{alias}**\n"
         message += "برای ارسال پیام متنی، کافیست پیام خود را برای من ارسال کنید."
     else:
         message += "برای شروع، ابتدا باید یک نام مستعار برای خود انتخاب کنید.\n"
-        message += "لطفاً از دستور /setalias [نام_مستعار] استفاده کنید."
-    await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+        message += "لطفاً روی دکمه **تنظیم نام مستعار** کلیک کنید."
+
+    reply_markup = await get_main_reply_keyboard(user_id)
+    await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sends a help message with available commands."""
+    """Sends a help message with available commands using reply keyboard."""
     user_id = update.effective_user.id
     response_text = (
         "راهنمای استفاده از ربات مدیریت کانال ناشناس:\n\n"
         "**دستورات کاربری:**\n"
         "📝 **ارسال پیام:** کافیست پیام متنی یا رسانه خود (عکس/ویدیو) را برای من ارسال کنید.\n"
-        "👤 **/setalias [نام_مستعار]**: نام مستعار خود را تنظیم کنید (فقط یک بار).\n"
-        "📊 **/mystats**: مشاهده آمار شخصی (پیام‌های ارسالی، وضعیت مسدودیت).\n"
-        "ℹ️ **/help**: نمایش این راهنما.\n\n"
+        "👤 *تنظیم نام مستعار*: برای تنظیم یا مشاهده نام مستعار.\n" 
+        "📊 *آمار من*: مشاهده آمار شخصی.\n"
+        "ℹ️ *راهنما*: نمایش این راهنما.\n\n"
     )
+    
     if is_admin(user_id):
         response_text += (
             "**دستورات مدیر:**\n"
-            "⚙️ **/adminpanel**: دسترسی به پنل مدیریت.\n"
-            "👥 **/manageusers**: مدیریت کاربران (مسدود/رفع مسدودیت).\n"
-            "📋 **/pending**: مشاهده پیام‌های رسانه‌ای در انتظار تایید.\n"
-            "📊 **/totalstats**: مشاهده آمار کلی ربات.\n"
+            "⚙️ *پنل مدیریت*: دسترسی به ابزارهای مدیریتی.\n" 
+            "👥 *مدیریت کاربران*: مسدود/رفع مسدودیت کاربران.\n"
+            "📋 *پیام‌های در انتظار*: تایید/رد رسانه‌ها.\n"
+            "📊 *آمار کل*: مشاهده آمار کلی ربات.\n"
         )
-    await update.message.reply_text(response_text, parse_mode=ParseMode.MARKDOWN)
+    
+    reply_markup = await get_main_reply_keyboard(user_id)
+    await update.message.reply_text(response_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
 
-async def setalias_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Allows a user to set their unique alias."""
+async def set_alias_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles the 'تنظیم نام مستعار' button click or /setalias command."""
     user_id = update.effective_user.id
-    username = update.effective_user.username or f"id_{user_id}"
-
-    if not context.args:
-        await update.message.reply_text("لطفاً یک نام مستعار وارد کنید. مثال: /setalias روبات")
-        return
-
-    new_alias = " ".join(context.args).strip()
-    if not new_alias:
-        await update.message.reply_text("نام مستعار نمی‌تواند خالی باشد. لطفاً یک نام معتبر وارد کنید.")
-        return
-
-    if contains_forbidden_words(new_alias):
-        await update.message.reply_text("نام مستعار شما شامل کلمات ممنوعه است. لطفاً نام دیگری انتخاب کنید.")
-        return
-
     current_alias = get_user_alias(user_id)
     if current_alias:
-        await update.message.reply_text(f"شما قبلاً نام مستعار **{current_alias}** را انتخاب کرده‌اید و فقط یک بار امکان تغییر آن وجود دارد. در صورت نیاز به تغییر، با مدیران تماس بگیرید.", parse_mode=ParseMode.MARKDOWN)
-        return
-
-    if set_user_alias(user_id, username, new_alias):
-        await update.message.reply_text(f"نام مستعار شما با موفقیت به **{new_alias}** تنظیم شد.", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"شما قبلاً نام مستعار **{current_alias}** را انتخاب کرده‌اید. در صورت نیاز به تغییر، با مدیران تماس بگیرید.", parse_mode=ParseMode.MARKDOWN)
     else:
-        await update.message.reply_text("این نام مستعار قبلاً استفاده شده است. لطفاً نام دیگری انتخاب کنید.")
+        USER_STATE[user_id] = "waiting_for_alias"
+        await update.message.reply_text("لطفاً **نام مستعار** مورد نظر خود را در پیام بعدی *ارسال* کنید:")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles incoming text messages and media."""
     user_id = update.effective_user.id
     user_username = update.effective_user.username or f"id_{user_id}"
     user_alias = get_user_alias(user_id)
+
+    # --- بررسی وضعیت کاربر برای setalias ---
+    if USER_STATE.get(user_id) == "waiting_for_alias" and update.message.text:
+        new_alias = update.message.text.strip()
+        if not new_alias:
+            await update.message.reply_text("نام مستعار نمی‌تواند خالی باشد. لطفاً یک نام معتبر وارد کنید.")
+            return
+
+        if contains_forbidden_words(new_alias):
+            await update.message.reply_text("نام مستعار شما شامل کلمات ممنوعه است. لطفاً نام دیگری انتخاب کنید.")
+            del USER_STATE[user_id] # وضعیت را ریست می‌کنیم
+            reply_markup = await get_main_reply_keyboard(user_id)
+            await update.message.reply_text("عملیات تنظیم نام مستعار لغو شد. می‌توانید دوباره تلاش کنید.", reply_markup=reply_markup)
+            return
+        
+        if set_user_alias(user_id, username=user_username, alias=new_alias):
+            await update.message.reply_text(f"نام مستعار شما با موفقیت به **{new_alias}** تنظیم شد. می‌توانید پیام‌های خود را ارسال کنید.", parse_mode=ParseMode.MARKDOWN)
+            del USER_STATE[user_id] # وضعیت را ریست می‌کنیم
+            reply_markup = await get_main_reply_keyboard(user_id)
+            await update.message.reply_text("منوی اصلی:", reply_markup=reply_markup) # نمایش کیبورد اصلی
+        else:
+            await update.message.reply_text("این نام مستعار قبلاً استفاده شده است. لطفاً نام دیگری انتخاب کنید.")
+            # وضعیت را همچنان در waiting_for_alias نگه می‌داریم تا کاربر دوباره نام مستعار بدهد
+        return # مهم: از تابع خارج می‌شویم تا به بقیه handle_message نرویم
 
     # --- بررسی شرایط ارسال پیام ---
     if not is_working_hours() and not is_admin(user_id):
@@ -362,7 +401,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if not user_alias:
-        await update.message.reply_text("لطفاً ابتدا با دستور /setalias نام مستعار خود را تنظیم کنید.")
+        await update.message.reply_text("لطفاً ابتدا با دستور /setalias یا دکمه **تنظیم نام مستعار** نام مستعار خود را تنظیم کنید.")
         return
 
     last_time = get_last_message_time(user_id)
@@ -447,19 +486,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # --- هندلرهای مدیریتی ---
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Displays the admin panel options."""
+    """Displays the admin panel options with reply keyboard."""
     user_id = update.effective_user.id
     if not is_admin(user_id):
         await update.message.reply_text("شما دسترسی به پنل مدیریت ندارید.")
         return
 
-    response_text = (
-        "**پنل مدیریت:**\n\n"
-        "📋 **/pending**: مشاهده و مدیریت رسانه‌های در انتظار تایید.\n"
-        "👥 **/manageusers**: مدیریت کاربران (مسدود/رفع مسدودیت).\n"
-        "📊 **/totalstats**: مشاهده آمار کلی ربات.\n"
-    )
-    await update.message.reply_text(response_text, parse_mode=ParseMode.MARKDOWN)
+    response_text = "**پنل مدیریت:**"
+    reply_markup = await get_admin_reply_keyboard()
+    await update.message.reply_text(response_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+
+
+async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Returns to the main menu from admin panel."""
+    user_id = update.effective_user.id
+    reply_markup = await get_main_reply_keyboard(user_id)
+    await update.message.reply_text("به منوی اصلی بازگشتید.", reply_markup=reply_markup)
+
 
 async def manage_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Provides instructions for user management."""
@@ -656,7 +699,7 @@ async def total_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     total_users = get_total_users()
     banned_users = get_banned_users_count()
     total_messages_pending = len(get_pending_media()) # تعداد پیام‌های در انتظار
-    total_messages_published = get_total_messages() # این تابع فقط رسانه های تایید شده را برمیگرداند
+    total_messages_published = get_total_messages_published() # این تابع فقط رسانه های تایید شده را برمیگرداند
 
     response_text = (
         "**آمار کلی ربات:**\n"
@@ -671,16 +714,14 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Log the error and send a traceback to the user (if admin)."""
     logger.error("Exception while handling an update:", exc_info=context.error)
 
-    # In case of an error while handling a callback query, the update.effective_message might be None
-    # We try to send error to effective_chat or the admin who caused the error
-    if update.effective_chat:
-        message_target = update.effective_chat.id
-    elif update.effective_user:
+    # Determine target for error message
+    message_target = None
+    if update.effective_user and is_admin(update.effective_user.id):
         message_target = update.effective_user.id
-    else:
-        message_target = None # No target to send error message
+    elif update.effective_chat:
+        message_target = update.effective_chat.id
 
-    if message_target and update.effective_user and is_admin(update.effective_user.id):
+    if message_target:
         tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
         tb_string = "".join(tb_list)
         message = (
@@ -690,14 +731,33 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         try:
             await context.bot.send_message(chat_id=message_target, text=message, parse_mode=ParseMode.HTML)
         except Exception as e:
-            logger.error(f"Failed to send error message to admin {message_target}: {e}")
+            logger.error(f"Failed to send error message to {message_target}: {e}")
     else:
-        logger.warning("Error occurred, but no effective chat/user to send notification or user is not admin.")
+        logger.warning("Error occurred, but no effective chat/user to send notification.")
 
+# --- تابع Keep-Alive برای جلوگیری از خواب رفتن Render ---
+def keep_alive():
+    """Pings the Render external URL at regular intervals to keep the service alive."""
+    if not RENDER_EXTERNAL_URL:
+        logger.warning("RENDER_EXTERNAL_URL is not set. Keep-alive function will not run.")
+        return
+
+    while True:
+        try:
+            response = requests.get(RENDER_EXTERNAL_URL)
+            if response.status_code == 200:
+                logger.info(f"Keep-alive ping successful at {datetime.now()}.")
+            else:
+                logger.warning(f"Keep-alive ping failed with status code {response.status_code}.")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Keep-alive request failed: {e}")
+        
+        # پینگ هر 10 تا 15 دقیقه (برای Render Worker معمولاً 5-15 دقیقه خوبه)
+        time.sleep(13 * 60) # 13 دقیقه
 
 # --- تابع اصلی برای راه‌اندازی ربات ---
 def main() -> None:
-    """Starts the bot."""
+    """Starts the bot and the keep-alive thread."""
     init_db()
 
     # بررسی وجود متغیرهای محیطی حیاتی
@@ -709,12 +769,36 @@ def main() -> None:
         logger.critical("CHANNEL_ID environment variable is not set. Bot cannot start.")
         raise ValueError("CHANNEL_ID is not set. Please set it in your environment variables.")
 
+    # شروع Keep-Alive در یک ترد جداگانه
+    if RENDER_EXTERNAL_URL:
+        keep_alive_thread = threading.Thread(target=keep_alive)
+        keep_alive_thread.daemon = True # باعث می‌شود ترد با بسته شدن برنامه اصلی بسته شود
+        keep_alive_thread.start()
+        logger.info("Keep-alive thread started.")
+    else:
+        logger.warning("RENDER_EXTERNAL_URL not set. Keep-alive feature is disabled. Bot might go to sleep on Render.")
+
+
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     # --- اضافه کردن هندلرها ---
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("setalias", setalias_command))
+    # این CommandHandler برای /setalias سنتی است، میتونید حذفش کنید اگر فقط دکمه رو میخواید
+    application.add_handler(CommandHandler("setalias", set_alias_button_handler)) 
+
+    # هندلر برای دکمه های ریپلای کیبورد (کاربرپسند)
+    application.add_handler(MessageHandler(filters.Regex("^👤 تنظیم نام مستعار$") & ~filters.COMMAND, set_alias_button_handler))
+    application.add_handler(MessageHandler(filters.Regex("^📊 آمار من$") & ~filters.COMMAND, my_stats_command))
+    application.add_handler(MessageHandler(filters.Regex("^ℹ️ راهنما$") & ~filters.COMMAND, help_command))
+    application.add_handler(MessageHandler(filters.Regex("^⚙️ پنل مدیریت$") & ~filters.COMMAND & filters.User(lambda user: is_admin(user.id)), admin_panel))
+    application.add_handler(MessageHandler(filters.Regex("^📋 پیام‌های در انتظار$") & ~filters.COMMAND & filters.User(lambda user: is_admin(user.id)), pending_media_command))
+    application.add_handler(MessageHandler(filters.Regex("^👥 مدیریت کاربران$") & ~filters.COMMAND & filters.User(lambda user: is_admin(user.id)), manage_users))
+    application.add_handler(MessageHandler(filters.Regex("^📊 آمار کل$") & ~filters.COMMAND & filters.User(lambda user: is_admin(user.id)), total_stats_command))
+    application.add_handler(MessageHandler(filters.Regex("^🔙 بازگشت به منوی اصلی$") & ~filters.COMMAND & filters.User(lambda user: is_admin(user.id)), back_to_main_menu))
+
+
+    # هندلرهای مدیریتی (برای حالتی که ادمین‌ها دستور رو تایپ کنن، اگرچه دکمه‌ها بهترن)
     application.add_handler(CommandHandler("adminpanel", admin_panel))
     application.add_handler(CommandHandler("manageusers", manage_users))
     application.add_handler(CommandHandler("ban", ban_command))
@@ -723,9 +807,8 @@ def main() -> None:
     application.add_handler(CommandHandler("mystats", my_stats_command))
     application.add_handler(CommandHandler("totalstats", total_stats_command))
 
-    # هندلر برای پیام‌های متنی و رسانه
-    # filters.TEXT | filters.PHOTO | filters.VIDEO: پیام‌های متنی، عکس، و ویدیو را مدیریت می‌کند
-    # ~filters.COMMAND: پیام‌هایی که دستور نیستند (مثلاً /start)
+    # هندلر اصلی برای پیام‌های متنی و رسانه
+    # این هندلر تمام پیام‌هایی که دستور نیستند را مدیریت می‌کند
     application.add_handler(
         MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO & ~filters.COMMAND, handle_message)
     )
@@ -736,10 +819,7 @@ def main() -> None:
     # افزودن Error Handler
     application.add_error_handler(error_handler)
 
-    # شروع دریافت آپدیت‌ها
     logger.info("Bot started polling...")
-    # poll_interval: فاصله زمانی بین درخواست‌های آپدیت جدید (بر حسب ثانیه)
-    # timeout: حداکثر زمانی که برای یک آپدیت منتظر می‌ماند (بر حسب ثانیه)
     application.run_polling(poll_interval=3, timeout=30) 
 
 if __name__ == "__main__":

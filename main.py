@@ -84,12 +84,12 @@ def init_db():
                 username TEXT
             )
         """)
-        
+
         if MAIN_ADMIN_ID:
             cursor.execute("SELECT COUNT(*) FROM admins WHERE user_id = ?", (MAIN_ADMIN_ID,))
             if cursor.fetchone()[0] == 0:
                 try:
-                    cursor.execute("INSERT INTO admins (user_id, username) VALUES (?, ?)", 
+                    cursor.execute("INSERT INTO admins (user_id, username) VALUES (?, ?)",
                                    (MAIN_ADMIN_ID, "main_admin"))
                     logger.info(f"Default main admin {MAIN_ADMIN_ID} added to database.")
                 except Exception as e:
@@ -207,7 +207,7 @@ def get_total_users() -> int:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM users")
         return cursor.fetchone()[0]
-        
+
 def get_all_user_ids() -> list[int]:
     """تمام شناسه‌های کاربری را برای ارسال همگانی برمی‌گرداند."""
     with sqlite3.connect(DATABASE_PATH) as conn:
@@ -379,13 +379,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         else:
             await update.message.reply_text("این نام مستعار قبلاً استفاده شده است. لطفاً نام دیگری انتخاب کنید.")
         return
-        
+
     # --- مدیریت ارسال پیام همگانی توسط ادمین ---
     if current_state == "waiting_for_broadcast_message" and is_admin(user_id):
         all_user_ids = get_all_user_ids()
         successful_sends = 0
         failed_sends = 0
-        
+
         await update.message.reply_text(f"در حال شروع ارسال پیام همگانی به {len(all_user_ids)} کاربر. این فرآیند ممکن است زمان‌بر باشد...")
 
         for uid in all_user_ids:
@@ -396,7 +396,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             except TelegramError as e:
                 logger.warning(f"Failed to send broadcast message to {uid}: {e}")
                 failed_sends += 1
-        
+
         del USER_STATE[user_id]
         reply_markup = await get_admin_reply_keyboard()
         await update.message.reply_text(
@@ -444,7 +444,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         file_id = update.message.photo[-1].file_id if update.message.photo else update.message.video.file_id
         file_type = "photo" if update.message.photo else "video"
         media_id = add_pending_media(user_id, file_id, file_type, caption_text)
-        
+
         all_admins = list_all_admins()
         for admin_id, _ in all_admins:
             try:
@@ -475,7 +475,7 @@ async def cancel_operation(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text(f"عملیات لغو شد.")
     else:
         await update.message.reply_text("هیچ عملیاتی برای لغو وجود ندارد.")
-    
+
     reply_markup = await get_main_reply_keyboard(user_id)
     await update.message.reply_text("به منوی اصلی بازگشتید.", reply_markup=reply_markup)
 
@@ -558,7 +558,7 @@ async def user_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not user_id:
         await update.message.reply_text(f"کاربر '{target_arg}' یافت نشد.")
         return
-    
+
     alias = get_user_alias(user_id) or "تنظیم نشده"
     is_banned_status = "بله" if is_user_banned(user_id) else "خیر"
     last_msg_time = get_last_message_time(user_id)
@@ -617,7 +617,7 @@ async def list_admins_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not admins:
         await update.message.reply_text("هیچ ادمینی ثبت نشده است.")
         return
-    
+
     response_text = "**لیست ادمین‌ها:**\n"
     for user_id, username in admins:
         is_main = " (اصلی)" if user_id == MAIN_ADMIN_ID else ""
@@ -753,7 +753,7 @@ def setup_handlers(app_instance: Application):
     app_instance.add_handler(CommandHandler("cancel", cancel_operation))
     app_instance.add_handler(CommandHandler("setalias", set_alias_button_handler))
     app_instance.add_handler(CommandHandler("mystats", my_stats_command))
-    
+
     # دکمه‌های منوی اصلی
     app_instance.add_handler(MessageHandler(filters.Regex("^👤 تنظیم نام مستعار$") & ~filters.COMMAND, set_alias_button_handler))
     app_instance.add_handler(MessageHandler(filters.Regex("^📊 آمار من$") & ~filters.COMMAND, my_stats_command))
@@ -767,7 +767,7 @@ def setup_handlers(app_instance: Application):
     app_instance.add_handler(MessageHandler(filters.Regex("^📊 آمار کل$") & ~filters.COMMAND & IS_ADMIN_FILTER, total_stats_command))
     app_instance.add_handler(MessageHandler(filters.Regex("^📢 ارسال همگانی$") & ~filters.COMMAND & IS_ADMIN_FILTER, broadcast_prompt))
     app_instance.add_handler(MessageHandler(filters.Regex("^🔙 بازگشت به منوی اصلی$") & ~filters.COMMAND, back_to_main_menu))
-    
+
     # دستورات ادمین
     app_instance.add_handler(CommandHandler("ban", ban_command, filters=IS_ADMIN_FILTER))
     app_instance.add_handler(CommandHandler("unban", unban_command, filters=IS_ADMIN_FILTER))
@@ -790,8 +790,11 @@ setup_handlers(application)
 async def telegram_webhook():
     """هندل کردن آپدیت‌های تلگرام از طریق وب‌هوک."""
     if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), application.bot)
-        application.update_queue.put_nowait(update)
+        try:
+            update = Update.de_json(request.get_json(force=True), application.bot)
+            application.update_queue.put_nowait(update)
+        except Exception as e:
+            logger.error(f"Error processing webhook update: {e}")
         return "ok", 200
     return "Method Not Allowed", 405
 
@@ -800,23 +803,43 @@ def home():
     """مسیر Health Check برای زنده نگه داشتن سرویس."""
     return "Bot is alive and kicking!", 200
 
+
+# --- کدهای اصلاح شده برای اجرای صحیح ربات در ترد جانبی ---
+
+async def run_application():
+    """
+    برنامه را برای پردازش آپدیت‌ها از صف مقداردهی اولیه کرده و اجرا می‌کند.
+    این تابع signal handler نصب نمی‌کند و برای اجرا در ترد جانبی مناسب است.
+    """
+    logger.info("Starting application processor...")
+    await application.initialize()
+    await application.start()
+
+    # این خط ترد را زنده و منتظر نگه می‌دارد تا آپدیت‌ها را پردازش کند
+    await asyncio.Future()
+
 def run_bot_in_thread():
-    """ربات را در یک ترد جداگانه با event loop مخصوص به خود اجرا می‌کند."""
-    logger.info("Telegram bot processing thread started.")
+    """پردازشگر ربات را در یک ترد جداگانه با event loop مخصوص به خود اجرا می‌کند."""
+    logger.info("Dispatching bot processing thread.")
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        application.run_polling(poll_interval=1, timeout=30, close_loop=False)
+        # تابع run_application را در event loop جدید اجرا می‌کنیم
+        loop.run_until_complete(run_application())
     except Exception as e:
-        logger.critical(f"Error in bot processing thread: {e}", exc_info=True)
+        # لاگ کردن خطا در صورت بروز مشکل جدی در ترد
+        logger.critical(f"Unhandled exception in bot processing thread: {e}", exc_info=True)
     finally:
+        logger.info("Bot processing thread is shutting down.")
+        # اطمینان از توقف صحیح برنامه قبل از بستن لوپ
+        if application.running:
+            loop.run_until_complete(application.stop())
         loop.close()
-        logger.info("Telegram bot processing thread finished.")
 
 def main() -> None:
     """راه‌اندازی ربات و وب‌سرور Flask."""
     init_db()
-    
+
     required_vars = ["TELEGRAM_BOT_TOKEN", "CHANNEL_ID", "MAIN_ADMIN_ID", "RENDER_EXTERNAL_URL"]
     for var in required_vars:
         if not os.getenv(var):

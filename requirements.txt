@@ -1,6 +1,3 @@
-# requirements.txt
 python-telegram-bot[ext]
 flask
-requests
-httpx
 waitress

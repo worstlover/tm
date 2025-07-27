@@ -19,7 +19,7 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 # --- اضافه کردن Flask و ابزارهای Webhook ---
-from flask import Flask, request, jsonify # اضافه کردن request و jsonify
+from flask import Flask, request, jsonify
 import asyncio # نیاز به asyncio برای اجرای loop در ترد اصلی
 
 app = Flask(__name__)
@@ -66,8 +66,35 @@ FORBIDDEN_WORDS = [
     "کوس", "کیرم", "کسخول", "ننت", "بیناموس", "کسده", "چاقال", "اوبی", "کونی", "کیری",
     "کسخل", "کصکش", "کون", "کونی", "کیر", "کس", "جنده", "حرومزاده", "لاشی", "کثافت", "احمق",
     "بی‌شعور", "نفهم", "نادان", "بیشرف", "هرزه", "فاحشه", "پست", "مایه_ننگ", "مزخرف",
-    "گمشو", "خفه_شو", "حرامزاده", "عوضی", "پلید", "رذل", "کثیف", "هیز", "قرمساق", "بی‌وطن"
-   
+    "گمشو", "خفه_شو", "حرامزاده", "عوضی", "پلید", "رذل", "کثیف", "هیز", "قرمساق", "بی‌وطن",
+    "متجاوز", "قاتل", "دیوث", "دشمن", "خائن", "بی‌ریشه", "کودن", "ابله", "چلمن", "شلخته",
+    "قراضه", "بی‌وجود", "مزخرفات", "خزعبلات", "چرندیات", "واژگون", "نابود", "ویران",
+    "منفور", "مغرض", "فاسد", "ریاکار", "دروغگو", "کلاهبردار", "جعلکار", "گول‌زن",
+    "توطئه‌گر", "فریبکار", "تبهکار", "متخلف", "قانون‌شکن", "مجرم", "جانی", "بزهکار",
+    "ارازل", "اوباش", "زورگیر", "باجگیر", "تروریست", "انتحاری", "آشغال", "زباله",
+    "چرت", "پرت", "مزخرف", "هتاک", "توهین‌آمیز", "زننده", "شرم‌آور", "رسوا", "افتضاح",
+    "فلاکتبار", "نفرت‌انگیز", "ناخوشایند", "مشمئزکننده", "کثیف", "زشت", "کریه",
+    "شیطان", "ابلیس", "جن", "دیو", "اهریمن", "شیاطین", "جنایتکار", "جنایتکاران",
+    "قاتلین", "نابودگران", "مفسدین", "ستمکاران", "ظالمین", "جهنمی", "عذاب‌آور",
+    "نفرین", "لعنت", "مرگ", "تباهی", "نابودی", "هلاکت", "زوال", "فنا", "جهنم", "دوزخ",
+    "شکنجه", "آزار", "اذیت", "خشونت", "تجاوز", "نفرت", "کینه", "خشم", "کینه_توز",
+    "حسادت", "بخل", "طمع", "حرص", "دروغ", "فریب", "خیانت", "نامردی", "پستی", "رذالت",
+    "بی‌غیرت", "بی‌شرف", "بی‌وجدان", "بی‌رحم", "سنگدل", "ظالم", "ستمگر", "متعصب",
+    "جاهل", "نادان", "عقب‌مانده", "بدوی", "همجی", "وحشی", "افراطی", "تندرو", "خشونت‌طلب",
+    "وحشتناک", "ترسناک", "مهیب", "کابوس", "فاجعه", "غم‌انگیز", "تلخ", "دردناک",
+    "شوم", "نحس", "بدشگون", "تاریک", "سیاه", "تیره", "عبوس", "غمبار", "اندوهگین",
+    "مغموم", "افسرده", "افسرده‌کننده", "نومید", "مایوس", "مأیوس‌کننده", "دلگیر",
+    "دلتنگ", "بی‌قرار", "بی‌تاب", "غمزده", "مصیبت_بار", "بحرانی", "خطرناک", "مهلک",
+    "مرگبار", "کثیف", "زشت", "نامطبوع", "منزجرکننده", "حال_به_هم_زن", "غیر_قابل_تحمل",
+    "فاسد", "خراب", "ناپاک", "نجس", "پلید", "کثیف", "چسبناک", "بودار", "گندیده",
+    "پوسیده", "خراب_شده", "از_بین_رفته", "نابود_شده", "ویران_شده", "سوخته", "مخروبه",
+    "داغون", "شلخته", "نامرتب", "کثیف", "بی‌نظم", "پریشان", "آشفته", "سردرگم",
+    "بی‌هدف", "بی‌جهت", "بی‌فایده", "بیهوده", "پوچ", "خالی", "تهی", "بی‌ارزش",
+    "بی‌اهمیت", "بی‌معنی", "مزخرف", "چرند", "پرت_و_پلا", "خزعبل", "بی‌خود",
+    "مزخرف‌گو", "چرند_گو", "بیهوده_گو", "پر_حرف", "زیاده_گو", "ناشی", "غیر_حرفه‌ای",
+    "آماتور", "بی‌تجربه", "کند", "تنبل", "بی‌حال", "بی‌تفاوت", "سرد", "بی‌احساس",
+    "بی‌روح", "خالی_ذهن", "احمق", "کندذهن", "کم‌هوش", "ابله", "نفهم", "نادان",
+    "بی‌سواد", "جاهل", "غیر_منطقی", "بی‌منطق", "غیرهوشمند", "نابخرد", "نادان_بزرگ"
 ]
 
 # --- توابع پایگاه داده (SQLite) ---
@@ -898,14 +925,16 @@ async def telegram_webhook():
             return "No update data", 400
         
         try:
+            # ایجاد یک شیء Update از JSON دریافتی
             update = Update.de_json(update_json, application.bot)
-            # اجرای process_update به صورت async
-            await application.process_update(update)
+            # به جای فراخوانی مستقیم process_update
+            # Update را به صف داخلی Application اضافه می‌کنیم
+            application.update_queue.put_nowait(update) # استفاده از put_nowait برای جلوگیری از بلاک شدن
         except Exception as e:
             logger.error(f"Error processing update: {e}", exc_info=True)
             return jsonify({"status": "error", "message": str(e)}), 500
         
-        return "ok", 200
+        return "ok", 200 # پاسخ سریع به تلگرام
     return "Method Not Allowed", 405
 
 # --- مسیر Flask برای بررسی سلامت (Health Check) ---
@@ -914,6 +943,16 @@ def home():
     return "Bot is alive!", 200
 
 # --- تابع اصلی برای راه‌اندازی ربات و سرور Flask ---
+def run_bot_in_thread():
+    """This function will run application.run_polling in a separate thread."""
+    logger.info("Telegram bot polling thread started (for webhook processing).")
+    try:
+        # run_polling با webhook هم کار می‌کنه و update_queue رو مصرف می‌کنه
+        # چون ما webhook رو ست کردیم، اینجا فقط برای پردازش صف داخلی استفاده میشه
+        application.run_polling(poll_interval=1, timeout=30)
+    except Exception as e:
+        logger.critical(f"Error in bot polling thread: {e}", exc_info=True)
+
 def main() -> None:
     """Starts the bot and the Flask web server."""
     init_db()
@@ -936,24 +975,26 @@ def main() -> None:
     # تنظیم webhook در ابتدای کار
     webhook_url = f"{RENDER_EXTERNAL_URL}/{TELEGRAM_BOT_TOKEN}"
     try:
-        # از application.bot.set_webhook استفاده می کنیم که یک تابع async است
-        # برای اجرای آن در یک context سنکرون، از asyncio.run استفاده می کنیم
+        # چون application.bot.set_webhook() یک تابع async است، باید آن را در یک event loop اجرا کنیم
+        # ایجاد یک event loop موقت برای این کار اگر loop در ترد اصلی در حال اجرا نیست
         loop = asyncio.get_event_loop()
         if loop.is_running(): # اگر لوپ در حال اجراست، از create_task استفاده کن
-            task = loop.create_task(application.bot.set_webhook(url=webhook_url))
-            # Wait for the task to complete if needed, or let it run in background
+            loop.create_task(application.bot.set_webhook(url=webhook_url))
         else: # اگر لوپ در حال اجرا نیست، لوپ خودمون رو بسازیم و اجرا کنیم
             asyncio.run(application.bot.set_webhook(url=webhook_url))
         
         logger.info(f"Webhook set to: {webhook_url}")
     except Exception as e:
         logger.error(f"Failed to set webhook: {e}", exc_info=True)
-        # در اینجا بهتره عملیات متوقف نشه، چون Flask باید پورت رو باز نگه داره
-        # و ممکنه مشکل از اتصال موقت به تلگرام باشه.
-        # اما ربات بدون webhook کار نخواهد کرد.
+        # این خطا می‌تواند به دلیل مشکلات شبکه باشد، اما Flask باید شروع به کار کند تا webhook را دریافت کند
+
+    # شروع ترد جدید برای پردازش آپدیت‌های تلگرام
+    telegram_thread = threading.Thread(target=run_bot_in_thread, name="TelegramBotThread")
+    telegram_thread.daemon = True # باعث می‌شود ترد با بسته شدن برنامه اصلی بسته شود
+    telegram_thread.start()
+    logger.info("Telegram bot thread started.")
 
     # شروع Keep-Alive (پینگ کردن آدرس Render خودش) در یک ترد جداگانه
-    # این فقط برای اطمینان بیشتره و با وجود webhook، اهمیت کمتری داره.
     keep_alive_thread = threading.Thread(target=keep_alive_ping)
     keep_alive_thread.daemon = True
     keep_alive_thread.start()
@@ -961,10 +1002,8 @@ def main() -> None:
 
 
     # اجرای سرور Flask برای باز نگه داشتن پورت و هندل کردن webhook
-    port = int(os.getenv("PORT", 5000))
+    port = int(os.getenv("PORT", 10000)) # پورت پیش‌فرض Render معمولاً 10000 است
     logger.info(f"Starting Flask web server on port {port}...")
-    # در Flask 3.x+ اگر app.run را در ترد اصلی فراخوانی کنیم، نیاز به threading نیست.
-    # Flask خودش Blocking هست و ترد اصلی رو اشغال می‌کنه و webhook ها رو هندل می‌کنه.
     app.run(host="0.0.0.0", port=port)
 
 if __name__ == "__main__":

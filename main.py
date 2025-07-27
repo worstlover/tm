@@ -1,3 +1,5 @@
+# main.py
+
 import os
 import sqlite3
 import logging
@@ -8,6 +10,7 @@ import time
 import requests
 import asyncio
 from datetime import datetime, timedelta
+
 from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
@@ -21,30 +24,39 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
-# --- تنظیمات Flask برای Webhook ---
-app = Flask(__name__)
-
-# --- تنظیمات لاگینگ ---
+# --- تنظیمات لاگینگ (Logging) ---
+# کانفیگ لاگ برای نمایش بهتر اطلاعات در لاگ‌های رندر
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-# --- متغیرهای محیطی ---
+# --- خواندن متغیرهای محیطی (Environment Variables) ---
+# اطمینان از وجود متغیرهای ضروری برای اجرای ربات
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
-DATABASE_PATH = os.getenv("DATABASE_PATH", "bot_database.db")
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+MAIN_ADMIN_ID = os.getenv("MAIN_ADMIN_ID")
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL") # آدرس خارجی سرویس شما در رندر
 DISPLAY_CHANNEL_USERNAME = os.getenv("DISPLAY_CHANNEL_USERNAME", "YourChannel")
-MAIN_ADMIN_ID = int(os.getenv("MAIN_ADMIN_ID"))
+DATABASE_PATH = os.getenv("DATABASE_PATH", "bot_database.db")
 
-# --- تنظیمات ربات ---
+# تبدیل متغیرهای عددی با بررسی خطا
+try:
+    CHANNEL_ID = int(CHANNEL_ID) if CHANNEL_ID else None
+    MAIN_ADMIN_ID = int(MAIN_ADMIN_ID) if MAIN_ADMIN_ID else None
+except (ValueError, TypeError) as e:
+    logger.error(f"Error converting CHANNEL_ID or MAIN_ADMIN_ID to integer: {e}")
+    # خروج از برنامه اگر متغیرهای کلیدی تنظیم نشده باشند
+    exit("Fatal: Invalid or missing CHANNEL_ID or MAIN_ADMIN_ID.")
+
+
+# --- تنظیمات کلی ربات ---
 MESSAGE_INTERVAL = timedelta(minutes=2)
 WORKING_HOURS_START = 8
 WORKING_HOURS_END = 22
 
-# --- وضعیت کاربران برای مکالمات ---
+# --- وضعیت کاربران برای مکالمات چند مرحله‌ای ---
 USER_STATE = {} # {user_id: "waiting_for_alias" | "waiting_for_channel_message" | "waiting_for_broadcast_message"}
 
 # --- لیست کلمات ممنوعه (می‌توانید گسترش دهید) ---
@@ -55,6 +67,7 @@ FORBIDDEN_WORDS = [
 ]
 
 # --- توابع پایگاه داده (SQLite) ---
+# ... (تمام توابع دیتابیس شما بدون تغییر در اینجا قرار می‌گیرند) ...
 def init_db():
     """پایگاه داده و جداول را مقداردهی اولیه می‌کند."""
     with sqlite3.connect(DATABASE_PATH) as conn:
@@ -247,7 +260,8 @@ def list_all_admins() -> list[tuple]:
         cursor.execute("SELECT user_id, username FROM admins")
         return cursor.fetchall()
 
-
+# --- هندلرها و سایر توابع ربات ---
+# ... (تمام هندلرهای شما start_command, handle_message, admin_panel و غیره بدون تغییر در اینجا قرار می‌گیرند) ...
 # --- توابع کمکی ---
 def is_working_hours() -> bool:
     """بررسی می‌کند آیا در ساعات کاری هستیم."""
@@ -718,147 +732,151 @@ async def total_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """لاگ کردن خطاها و ارسال گزارش به ادمین اصلی."""
-    logger.error("Exception while handling an update:", exc_info=context.error)
+    logger.error(f"Exception while handling an update: {context.error}", exc_info=context.error)
     if MAIN_ADMIN_ID:
         tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
         tb_string = "".join(tb_list)
-        message = f"An exception was raised:\n<pre>{html.escape(tb_string)}</pre>"
+        # برای خوانایی بهتر در تلگرام، پیام را کوتاه می‌کنیم
+        error_message = f"An exception was raised:\n<pre>{html.escape(tb_string[-2000:])}</pre>"
         try:
-            await context.bot.send_message(chat_id=MAIN_ADMIN_ID, text=message, parse_mode=ParseMode.HTML)
+            await context.bot.send_message(chat_id=MAIN_ADMIN_ID, text=error_message, parse_mode=ParseMode.HTML)
         except Exception as e:
             logger.error(f"Failed to send error message to main admin: {e}")
 
+# --- راه‌اندازی و مدیریت سرویس ---
+# راه‌اندازی اپلیکیشن فلسک
+app = Flask(__name__)
+# ساخت اپلیکیشن ربات تلگرام
+ptb_application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-# --- تابع Keep-Alive برای Render ---
 def keep_alive_ping():
-    """سرویس را با پینگ کردن دوره‌ای زنده نگه می‌دارد."""
+    """
+    سرویس را با پینگ کردن دوره‌ای زنده نگه می‌دارد.
+    این تابع در یک ترد جداگانه اجرا می‌شود.
+    """
     if not RENDER_EXTERNAL_URL:
-        logger.warning("RENDER_EXTERNAL_URL not set. Keep-alive ping will not run.")
+        logger.warning("RENDER_EXTERNAL_URL is not set. Keep-alive ping will not run.")
         return
+    
+    # اندکی تاخیر اولیه برای اطمینان از بالا آمدن کامل وب‌سرور
+    time.sleep(30)
+    
     while True:
         try:
-            requests.get(RENDER_EXTERNAL_URL)
+            response = requests.get(RENDER_EXTERNAL_URL)
+            logger.info(f"Keep-alive ping sent to {RENDER_EXTERNAL_URL}. Status: {response.status_code}")
         except requests.exceptions.RequestException as e:
-            logger.error(f"Keep-alive request failed: {e}")
+            logger.error(f"Keep-alive ping failed: {e}")
         time.sleep(13 * 60) # هر 13 دقیقه
-
-
-# --- راه‌اندازی ربات و وب‌سرور ---
-application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-def setup_handlers(app_instance: Application):
-    # دستورات عمومی
-    app_instance.add_handler(CommandHandler("start", start_command))
-    app_instance.add_handler(CommandHandler("help", help_command))
-    app_instance.add_handler(CommandHandler("cancel", cancel_operation))
-    app_instance.add_handler(CommandHandler("setalias", set_alias_button_handler))
-    app_instance.add_handler(CommandHandler("mystats", my_stats_command))
-
-    # دکمه‌های منوی اصلی
-    app_instance.add_handler(MessageHandler(filters.Regex("^👤 تنظیم نام مستعار$") & ~filters.COMMAND, set_alias_button_handler))
-    app_instance.add_handler(MessageHandler(filters.Regex("^📊 آمار من$") & ~filters.COMMAND, my_stats_command))
-    app_instance.add_handler(MessageHandler(filters.Regex("^ℹ️ راهنما$") & ~filters.COMMAND, help_command))
-    app_instance.add_handler(MessageHandler(filters.Regex("^📝 ارسال پیام$") & ~filters.COMMAND, request_send_message))
-
-    # دکمه‌ها و دستورات پنل ادمین
-    app_instance.add_handler(MessageHandler(filters.Regex("^⚙️ پنل مدیریت$") & ~filters.COMMAND & IS_ADMIN_FILTER, admin_panel))
-    app_instance.add_handler(MessageHandler(filters.Regex("^📋 پیام‌های در انتظار$") & ~filters.COMMAND & IS_ADMIN_FILTER, pending_media_command))
-    app_instance.add_handler(MessageHandler(filters.Regex("^👥 مدیریت کاربران$") & ~filters.COMMAND & IS_ADMIN_FILTER, manage_users))
-    app_instance.add_handler(MessageHandler(filters.Regex("^📊 آمار کل$") & ~filters.COMMAND & IS_ADMIN_FILTER, total_stats_command))
-    app_instance.add_handler(MessageHandler(filters.Regex("^📢 ارسال همگانی$") & ~filters.COMMAND & IS_ADMIN_FILTER, broadcast_prompt))
-    app_instance.add_handler(MessageHandler(filters.Regex("^🔙 بازگشت به منوی اصلی$") & ~filters.COMMAND, back_to_main_menu))
-
-    # دستورات ادمین
-    app_instance.add_handler(CommandHandler("ban", ban_command, filters=IS_ADMIN_FILTER))
-    app_instance.add_handler(CommandHandler("unban", unban_command, filters=IS_ADMIN_FILTER))
-    app_instance.add_handler(CommandHandler("pending", pending_media_command, filters=IS_ADMIN_FILTER))
-    app_instance.add_handler(CommandHandler("userinfo", user_info_command, filters=IS_ADMIN_FILTER))
-
-    # دستورات ادمین اصلی
-    app_instance.add_handler(CommandHandler("addadmin", add_admin_command, filters=IS_MAIN_ADMIN_FILTER))
-    app_instance.add_handler(CommandHandler("removeadmin", remove_admin_command, filters=IS_MAIN_ADMIN_FILTER))
-    app_instance.add_handler(CommandHandler("listadmins", list_admins_command, filters=IS_MAIN_ADMIN_FILTER))
-
-    # هندلرهای پایانی
-    app_instance.add_handler(CallbackQueryHandler(button_callback))
-    app_instance.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO & ~filters.COMMAND, handle_message))
-    app_instance.add_error_handler(error_handler)
-
-setup_handlers(application)
 
 @app.route(f"/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
 async def telegram_webhook():
-    """هندل کردن آپدیت‌های تلگرام از طریق وب‌هوک."""
-    if request.method == "POST":
-        try:
-            update = Update.de_json(request.get_json(force=True), application.bot)
-            application.update_queue.put_nowait(update)
-        except Exception as e:
-            logger.error(f"Error processing webhook update: {e}")
-        return "ok", 200
-    return "Method Not Allowed", 405
+    """هندل کردن آپدیت‌های تلگرام که از طریق وب‌هوک ارسال می‌شوند."""
+    try:
+        update_data = request.get_json()
+        update = Update.de_json(update_data, ptb_application.bot)
+        # آپدیت به صف پردازش ربات اضافه می‌شود تا در ترد مخصوص به خود پردازش شود
+        await ptb_application.update_queue.put(update)
+    except Exception as e:
+        logger.error(f"Error processing webhook update: {e}")
+    return "ok", 200
 
 @app.route('/')
-def home():
-    """مسیر Health Check برای زنده نگه داشتن سرویس."""
+def health_check():
+    """
+    یک مسیر ساده برای بررسی سلامت سرویس.
+    این همان مسیری است که توسط ترد keep_alive_ping فراخوانی می‌شود.
+    """
     return "Bot is alive and kicking!", 200
 
-
-# --- کدهای اصلاح شده برای اجرای صحیح ربات در ترد جانبی ---
-
-async def run_application():
-    """
-    برنامه را برای پردازش آپدیت‌ها از صف مقداردهی اولیه کرده و اجرا می‌کند.
-    این تابع signal handler نصب نمی‌کند و برای اجرا در ترد جانبی مناسب است.
-    """
-    logger.info("Starting application processor...")
-    await application.initialize()
-    await application.start()
-
-    # این خط ترد را زنده و منتظر نگه می‌دارد تا آپدیت‌ها را پردازش کند
-    await asyncio.Future()
-
-def run_bot_in_thread():
-    """پردازشگر ربات را در یک ترد جداگانه با event loop مخصوص به خود اجرا می‌کند."""
-    logger.info("Dispatching bot processing thread.")
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        # تابع run_application را در event loop جدید اجرا می‌کنیم
-        loop.run_until_complete(run_application())
-    except Exception as e:
-        # لاگ کردن خطا در صورت بروز مشکل جدی در ترد
-        logger.critical(f"Unhandled exception in bot processing thread: {e}", exc_info=True)
-    finally:
-        logger.info("Bot processing thread is shutting down.")
-        # اطمینان از توقف صحیح برنامه قبل از بستن لوپ
-        if application.running:
-            loop.run_until_complete(application.stop())
-        loop.close()
-
 def main() -> None:
-    """راه‌اندازی ربات و وب‌سرور Flask."""
-    init_db()
-
+    """نقطه شروع اصلی برنامه: تنظیم وب‌هوک، راه‌اندازی تردها و اجرای وب‌سرور."""
+    # بررسی متغیرهای محیطی ضروری
     required_vars = ["TELEGRAM_BOT_TOKEN", "CHANNEL_ID", "MAIN_ADMIN_ID", "RENDER_EXTERNAL_URL"]
     for var in required_vars:
-        if not os.getenv(var):
-            raise ValueError(f"{var} environment variable is not set. Bot cannot start.")
+        if not globals().get(var):
+            raise ValueError(f"Environment variable {var} is not set. Bot cannot start.")
+    
+    # مقداردهی اولیه پایگاه داده
+    init_db()
 
-    webhook_url = f"{RENDER_EXTERNAL_URL}/{TELEGRAM_BOT_TOKEN}"
+    # تنظیم هندلرهای ربات
+    # ... (کد کامل setup_handlers که در فایل اصلی شما بود، در اینجا قرار می‌گیرد) ...
+    def setup_handlers(app_instance: Application):
+        # دستورات عمومی
+        app_instance.add_handler(CommandHandler("start", start_command))
+        app_instance.add_handler(CommandHandler("help", help_command))
+        app_instance.add_handler(CommandHandler("cancel", cancel_operation))
+        app_instance.add_handler(CommandHandler("setalias", set_alias_button_handler))
+        app_instance.add_handler(CommandHandler("mystats", my_stats_command))
+
+        # دکمه‌های منوی اصلی
+        app_instance.add_handler(MessageHandler(filters.Regex("^👤 تنظیم نام مستعار$") & ~filters.COMMAND, set_alias_button_handler))
+        app_instance.add_handler(MessageHandler(filters.Regex("^📊 آمار من$") & ~filters.COMMAND, my_stats_command))
+        app_instance.add_handler(MessageHandler(filters.Regex("^ℹ️ راهنما$") & ~filters.COMMAND, help_command))
+        app_instance.add_handler(MessageHandler(filters.Regex("^📝 ارسال پیام$") & ~filters.COMMAND, request_send_message))
+
+        # دکمه‌ها و دستورات پنل ادمین
+        app_instance.add_handler(MessageHandler(filters.Regex("^⚙️ پنل مدیریت$") & ~filters.COMMAND & IS_ADMIN_FILTER, admin_panel))
+        app_instance.add_handler(MessageHandler(filters.Regex("^📋 پیام‌های در انتظار$") & ~filters.COMMAND & IS_ADMIN_FILTER, pending_media_command))
+        app_instance.add_handler(MessageHandler(filters.Regex("^👥 مدیریت کاربران$") & ~filters.COMMAND & IS_ADMIN_FILTER, manage_users))
+        app_instance.add_handler(MessageHandler(filters.Regex("^📊 آمار کل$") & ~filters.COMMAND & IS_ADMIN_FILTER, total_stats_command))
+        app_instance.add_handler(MessageHandler(filters.Regex("^📢 ارسال همگانی$") & ~filters.COMMAND & IS_ADMIN_FILTER, broadcast_prompt))
+        app_instance.add_handler(MessageHandler(filters.Regex("^🔙 بازگشت به منوی اصلی$") & ~filters.COMMAND, back_to_main_menu))
+
+        # دستورات ادمین
+        app_instance.add_handler(CommandHandler("ban", ban_command, filters=IS_ADMIN_FILTER))
+        app_instance.add_handler(CommandHandler("unban", unban_command, filters=IS_ADMIN_FILTER))
+        app_instance.add_handler(CommandHandler("pending", pending_media_command, filters=IS_ADMIN_FILTER))
+        app_instance.add_handler(CommandHandler("userinfo", user_info_command, filters=IS_ADMIN_FILTER))
+
+        # دستورات ادمین اصلی
+        app_instance.add_handler(CommandHandler("addadmin", add_admin_command, filters=IS_MAIN_ADMIN_FILTER))
+        app_instance.add_handler(CommandHandler("removeadmin", remove_admin_command, filters=IS_MAIN_ADMIN_FILTER))
+        app_instance.add_handler(CommandHandler("listadmins", list_admins_command, filters=IS_MAIN_ADMIN_FILTER))
+
+        # هندلرهای پایانی
+        app_instance.add_handler(CallbackQueryHandler(button_callback))
+        app_instance.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO & ~filters.COMMAND, handle_message))
+        app_instance.add_error_handler(error_handler)
+    
+    setup_handlers(ptb_application)
+
+    # --- راه‌اندازی موازی ربات و وب‌سرور ---
+    async def run_bot_and_webhook():
+        # مقداردهی اولیه و اجرای پردازشگر ربات (بدون بلاک کردن)
+        await ptb_application.initialize()
+        await ptb_application.start()
+        
+        # تنظیم وب‌هوک پس از مقداردهی اولیه ربات
+        webhook_url = f"{RENDER_EXTERNAL_URL}/{TELEGRAM_BOT_TOKEN}"
+        await ptb_application.bot.set_webhook(url=webhook_url, allowed_updates=Update.ALL_TYPES)
+        logger.info(f"Webhook successfully set to: {webhook_url}")
+        
+        # ربات را در پس‌زمینه در حال اجرا نگه می‌دارد
+        await ptb_application.updater.start_polling()
+
+    # استفاده از یک event loop جدید برای اجرای وظایف async در یک ترد جداگانه
+    bot_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(bot_loop)
+    
+    # اجرای همزمان ربات و تنظیم وب‌هوک
     try:
-        asyncio.run(application.bot.set_webhook(url=webhook_url, allowed_updates=Update.ALL_TYPES))
-        logger.info(f"Webhook set to: {webhook_url}")
+        bot_loop.run_until_complete(run_bot_and_webhook())
     except Exception as e:
-        logger.error(f"Failed to set webhook: {e}", exc_info=True)
+        logger.critical(f"Failed to start bot and set webhook: {e}", exc_info=True)
         raise
 
-    threading.Thread(target=run_bot_in_thread, name="TelegramBotProcessingThread", daemon=True).start()
+    # راه‌اندازی ترد برای بیدار نگه داشتن سرویس
     threading.Thread(target=keep_alive_ping, name="KeepAliveThread", daemon=True).start()
 
+    # راه‌اندازی وب‌سرور فلسک برای دریافت وب‌هوک‌ها
     port = int(os.getenv("PORT", 10000))
     logger.info(f"Starting Flask web server on host 0.0.0.0 and port {port}...")
-    app.run(host="0.0.0.0", port=port)
+    # برای محیط تولید، استفاده از یک وب‌سرور WSGI مانند Gunicorn یا Waitress توصیه می‌شود
+    # اما برای سادگی، سرور داخلی فلسک هم کار می‌کند.
+    from waitress import serve
+    serve(app, host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
     main()

@@ -1,3 +1,6 @@
-python-telegram-bot==22.3 # یا ورژن دقیق شما
-Flask[async]             # این خط رو تغییر بده
-requests  
+# requirements.txt
+python-telegram-bot[ext]
+flask
+requests
+httpx
+waitress

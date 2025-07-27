@@ -1,0 +1,25 @@
+# render.yaml
+services:
+  - type: web
+    name: telegram-confession-bot
+    env: python
+    plan: free # یا starter اگر از سرویس پولی استفاده می‌کنید
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python main.py"
+    healthCheckPath: /
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false # توکن را از طریق داشبورد رندر وارد کنید
+      - key: CHANNEL_ID
+        sync: false # شناسه کانال را از طریق داشبورد رندر وارد کنید
+      - key: MAIN_ADMIN_ID
+        sync: false # شناسه ادمین اصلی را از طریق داشبورد رندر وارد کنید
+      - key: DISPLAY_CHANNEL_USERNAME
+        value: YourChannelUsername # نام کاربری کانال بدون @
+      - key: RENDER_EXTERNAL_URL
+        fromService:
+          type: web
+          name: telegram-confession-bot # باید با name سرویس شما یکی باشد
+          property: url
+      - key: PYTHON_VERSION
+        value: '3.11' # نسخه‌ی پایتون را مشخص کنید

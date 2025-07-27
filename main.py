@@ -5,7 +5,7 @@ import traceback
 import html
 import threading
 import time
-import requests 
+import requests
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
@@ -18,8 +18,10 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
-# --- اضافه کردن Flask ---
-from flask import Flask
+# --- اضافه کردن Flask و ابزارهای Webhook ---
+from flask import Flask, request, jsonify # اضافه کردن request و jsonify
+import asyncio # نیاز به asyncio برای اجرای loop در ترد اصلی
+
 app = Flask(__name__)
 
 # --- تنظیمات لاگینگ ---
@@ -33,7 +35,9 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) # CHANNEL_ID باید عدد صحیح باشد
 DATABASE_PATH = os.getenv("DATABASE_PATH", "bot_database.db")
-# آدرس URL سرویس Render شما برای Keep-Alive. حتماً اینو تنظیم کنید!
+
+# آدرس URL سرویس Render شما برای Webhook و Health Check. این باید حتماً تنظیم شود!
+# مثال: https://my-telegram-bot-xxxxx.onrender.com
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 
 # آیدی کانال (به فرمت YourChannelUsername بدون @) برای نمایش در پیام‌ها
@@ -62,7 +66,7 @@ FORBIDDEN_WORDS = [
     "کوس", "کیرم", "کسخول", "ننت", "بیناموس", "کسده", "چاقال", "اوبی", "کونی", "کیری",
     "کسخل", "کصکش", "کون", "کونی", "کیر", "کس", "جنده", "حرومزاده", "لاشی", "کثافت", "احمق",
     "بی‌شعور", "نفهم", "نادان", "بیشرف", "هرزه", "فاحشه", "پست", "مایه_ننگ", "مزخرف",
-    "گمشو", "خفه_شو", "حرامزاده", "عوضی", "پلید", "رذل", "کثیف", "هیز", "قرمساق", "بی‌وطن",
+    "گمشو", "خفه_شو", "حرامزاده", "عوضی", "پلید", "رذل", "کثیف", "هیز", "قرمساق", "بی‌وطن"
    
 ]
 
@@ -236,7 +240,7 @@ def get_total_users() -> int:
 def get_banned_users_count() -> int:
     """Gets the count of banned users."""
     with sqlite3.connect(DATABASE_PATH) as conn:
-        cursor = conn.conn.cursor()
+        cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
         return cursor.fetchone()[0]
 
@@ -830,8 +834,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     else:
         logger.warning("Error occurred, but no effective chat/user to send notification.")
 
-# --- تابع Keep-Alive برای جلوگیری از خواب رفتن Render ---
-# این تابع حالا فقط برای پینگ کردن بیرونی استفاده می شود و سرور Flask جایگزین آن شده است.
+# --- تابع Keep-Alive برای پینگ کردن بیرونی (اختیاری اما توصیه شده) ---
 def keep_alive_ping():
     """Pings the Render external URL at regular intervals to keep the service alive."""
     if not RENDER_EXTERNAL_URL:
@@ -848,8 +851,62 @@ def keep_alive_ping():
         except requests.exceptions.RequestException as e:
             logger.error(f"Keep-alive request failed: {e}")
         
-        # پینگ هر 10 تا 15 دقیقه (برای Render Worker معمولاً 5-15 دقیقه خوبه)
         time.sleep(13 * 60) # 13 دقیقه
+
+# --- Application و Webhook Handler ---
+application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+# --- اضافه کردن هندلرها به application (همانند قبل) ---
+def setup_handlers(app_instance: Application):
+    app_instance.add_handler(CommandHandler("start", start_command))
+    app_instance.add_handler(CommandHandler("help", help_command))
+    app_instance.add_handler(CommandHandler("cancel", cancel_operation))
+    app_instance.add_handler(CommandHandler("setalias", set_alias_button_handler))
+
+    app_instance.add_handler(MessageHandler(filters.Regex("^👤 تنظیم نام مستعار$") & ~filters.COMMAND, set_alias_button_handler))
+    app_instance.add_handler(MessageHandler(filters.Regex("^📊 آمار من$") & ~filters.COMMAND, my_stats_command))
+    app_instance.add_handler(MessageHandler(filters.Regex("^ℹ️ راهنما$") & ~filters.COMMAND, help_command))
+    app_instance.add_handler(MessageHandler(filters.Regex("^📝 ارسال پیام$") & ~filters.COMMAND, request_send_message))
+
+    app_instance.add_handler(MessageHandler(filters.Regex("^⚙️ پنل مدیریت$") & ~filters.COMMAND & IS_ADMIN_FILTER, admin_panel))
+    app_instance.add_handler(MessageHandler(filters.Regex("^📋 پیام‌های در انتظار$") & ~filters.COMMAND & IS_ADMIN_FILTER, pending_media_command))
+    app_instance.add_handler(MessageHandler(filters.Regex("^👥 مدیریت کاربران$") & ~filters.COMMAND & IS_ADMIN_FILTER, manage_users))
+    app_instance.add_handler(MessageHandler(filters.Regex("^📊 آمار کل$") & ~filters.COMMAND & IS_ADMIN_FILTER, total_stats_command))
+    app_instance.add_handler(MessageHandler(filters.Regex("^🔙 بازگشت به منوی اصلی$") & ~filters.COMMAND & IS_ADMIN_FILTER, back_to_main_menu))
+
+    app_instance.add_handler(CommandHandler("adminpanel", admin_panel, filters=IS_ADMIN_FILTER))
+    app_instance.add_handler(CommandHandler("manageusers", manage_users, filters=IS_ADMIN_FILTER))
+    app_instance.add_handler(CommandHandler("ban", ban_command, filters=IS_ADMIN_FILTER))
+    app_instance.add_handler(CommandHandler("unban", unban_command, filters=IS_ADMIN_FILTER))
+    app_instance.add_handler(CommandHandler("pending", pending_media_command, filters=IS_ADMIN_FILTER))
+    app_instance.add_handler(CommandHandler("mystats", my_stats_command))
+    app_instance.add_handler(CommandHandler("totalstats", total_stats_command, filters=IS_ADMIN_FILTER))
+
+    app_instance.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO & ~filters.COMMAND, handle_message))
+    app_instance.add_handler(CallbackQueryHandler(button_callback))
+    app_instance.add_error_handler(error_handler)
+
+setup_handlers(application) # هندلرها را اضافه می‌کنیم
+
+# --- مسیر Flask برای Webhook تلگرام ---
+@app.route(f"/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
+async def telegram_webhook():
+    """Handle incoming Telegram updates via webhook."""
+    if request.method == "POST":
+        update_json = request.get_json()
+        if not update_json:
+            return "No update data", 400
+        
+        try:
+            update = Update.de_json(update_json, application.bot)
+            # اجرای process_update به صورت async
+            await application.process_update(update)
+        except Exception as e:
+            logger.error(f"Error processing update: {e}", exc_info=True)
+            return jsonify({"status": "error", "message": str(e)}), 500
+        
+        return "ok", 200
+    return "Method Not Allowed", 405
 
 # --- مسیر Flask برای بررسی سلامت (Health Check) ---
 @app.route('/')
@@ -861,7 +918,6 @@ def main() -> None:
     """Starts the bot and the Flask web server."""
     init_db()
 
-    # بررسی وجود متغیرهای محیطی حیاتی
     if not TELEGRAM_BOT_TOKEN:
         logger.critical("TELEGRAM_BOT_TOKEN environment variable is not set. Bot cannot start.")
         raise ValueError("TELEGRAM_BOT_TOKEN is not set. Please set it in your environment variables.")
@@ -871,75 +927,44 @@ def main() -> None:
         raise ValueError("CHANNEL_ID is not set. Please set it in your environment variables.")
 
     if not MAIN_ADMIN_ID:
-        logger.critical("MAIN_ADMIN_ID environment variable is not set. Critical errors will not be reported to a specific admin.")
-        # نیازی به raise ValueError نیست، چون ربات بدون ادمین اصلی هم می‌تونه کار کنه ولی با قابلیت‌های محدودتر
+        logger.critical("MAIN_ADMIN_ID is not set. Critical errors will not be reported.")
+    
+    if not RENDER_EXTERNAL_URL:
+        logger.critical("RENDER_EXTERNAL_URL is not set. Webhook cannot be set.")
+        raise ValueError("RENDER_EXTERNAL_URL is not set. Please set it to your Render service URL (e.g., https://my-bot-xyz.onrender.com).")
 
-    # شروع ربات تلگرام در یک ترد جداگانه
-    def run_bot():
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-        # --- اضافه کردن هندلرها ---
-        application.add_handler(CommandHandler("start", start_command))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("cancel", cancel_operation)) # دستور /cancel برای لغو عملیات
-        application.add_handler(CommandHandler("setalias", set_alias_button_handler)) 
-
-        # هندلر برای دکمه های ریپلای کیبورد (کاربرپسند)
-        application.add_handler(MessageHandler(filters.Regex("^👤 تنظیم نام مستعار$") & ~filters.COMMAND, set_alias_button_handler))
-        application.add_handler(MessageHandler(filters.Regex("^📊 آمار من$") & ~filters.COMMAND, my_stats_command))
-        application.add_handler(MessageHandler(filters.Regex("^ℹ️ راهنما$") & ~filters.COMMAND, help_command))
-        application.add_handler(MessageHandler(filters.Regex("^📝 ارسال پیام$") & ~filters.COMMAND, request_send_message)) # هندلر جدید برای دکمه "ارسال پیام"
-
-        application.add_handler(MessageHandler(filters.Regex("^⚙️ پنل مدیریت$") & ~filters.COMMAND & IS_ADMIN_FILTER, admin_panel))
-        application.add_handler(MessageHandler(filters.Regex("^📋 پیام‌های در انتظار$") & ~filters.COMMAND & IS_ADMIN_FILTER, pending_media_command))
-        application.add_handler(MessageHandler(filters.Regex("^👥 مدیریت کاربران$") & ~filters.COMMAND & IS_ADMIN_FILTER, manage_users))
-        application.add_handler(MessageHandler(filters.Regex("^📊 آمار کل$") & ~filters.COMMAND & IS_ADMIN_FILTER, total_stats_command))
-        application.add_handler(MessageHandler(filters.Regex("^🔙 بازگشت به منوی اصلی$") & ~filters.COMMAND & IS_ADMIN_FILTER, back_to_main_menu))
-
-
-        # هندلرهای مدیریتی (برای حالتی که ادمین‌ها دستور رو تایپ کنن، اگرچه دکمه‌ها بهترن)
-        application.add_handler(CommandHandler("adminpanel", admin_panel, filters=IS_ADMIN_FILTER))
-        application.add_handler(CommandHandler("manageusers", manage_users, filters=IS_ADMIN_FILTER))
-        application.add_handler(CommandHandler("ban", ban_command, filters=IS_ADMIN_FILTER))
-        application.add_handler(CommandHandler("unban", unban_command, filters=IS_ADMIN_FILTER))
-        application.add_handler(CommandHandler("pending", pending_media_command, filters=IS_ADMIN_FILTER))
-        application.add_handler(CommandHandler("mystats", my_stats_command)) # این برای همه کاربرانه
-        application.add_handler(CommandHandler("totalstats", total_stats_command, filters=IS_ADMIN_FILTER))
-
-        # هندلر اصلی برای پیام‌های متنی و رسانه: این حالا فقط پیام‌های وقتی کاربر در حالت خاصی است را می‌گیرد
-        application.add_handler(
-            MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO & ~filters.COMMAND, handle_message)
-        )
-
-        # هندلر برای دکمه‌های اینلاین (تایید/رد رسانه)
-        application.add_handler(CallbackQueryHandler(button_callback))
-
-        # افزودن Error Handler
-        application.add_error_handler(error_handler)
-
-        logger.info("Bot started polling...")
-        application.run_polling(poll_interval=3, timeout=30) 
-
-    # شروع ربات تلگرام در یک ترد جداگانه
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
-    logger.info("Telegram bot thread started.")
+    # تنظیم webhook در ابتدای کار
+    webhook_url = f"{RENDER_EXTERNAL_URL}/{TELEGRAM_BOT_TOKEN}"
+    try:
+        # از application.bot.set_webhook استفاده می کنیم که یک تابع async است
+        # برای اجرای آن در یک context سنکرون، از asyncio.run استفاده می کنیم
+        loop = asyncio.get_event_loop()
+        if loop.is_running(): # اگر لوپ در حال اجراست، از create_task استفاده کن
+            task = loop.create_task(application.bot.set_webhook(url=webhook_url))
+            # Wait for the task to complete if needed, or let it run in background
+        else: # اگر لوپ در حال اجرا نیست، لوپ خودمون رو بسازیم و اجرا کنیم
+            asyncio.run(application.bot.set_webhook(url=webhook_url))
+        
+        logger.info(f"Webhook set to: {webhook_url}")
+    except Exception as e:
+        logger.error(f"Failed to set webhook: {e}", exc_info=True)
+        # در اینجا بهتره عملیات متوقف نشه، چون Flask باید پورت رو باز نگه داره
+        # و ممکنه مشکل از اتصال موقت به تلگرام باشه.
+        # اما ربات بدون webhook کار نخواهد کرد.
 
     # شروع Keep-Alive (پینگ کردن آدرس Render خودش) در یک ترد جداگانه
-    if RENDER_EXTERNAL_URL:
-        keep_alive_thread = threading.Thread(target=keep_alive_ping)
-        keep_alive_thread.daemon = True 
-        keep_alive_thread.start()
-        logger.info("Keep-alive ping thread started.")
-    else:
-        logger.warning("RENDER_EXTERNAL_URL not set. External keep-alive ping is disabled.")
+    # این فقط برای اطمینان بیشتره و با وجود webhook، اهمیت کمتری داره.
+    keep_alive_thread = threading.Thread(target=keep_alive_ping)
+    keep_alive_thread.daemon = True
+    keep_alive_thread.start()
+    logger.info("Keep-alive ping thread started.")
 
 
-    # اجرای سرور Flask برای باز نگه داشتن پورت (معمولاً در محیط‌های هاستینگ لازم است)
-    # Render پورت را از متغیر محیطی PORT می خواند
-    port = int(os.getenv("PORT", 5000)) # پورت پیش فرض 5000 اگر PORT تنظیم نشده باشد
+    # اجرای سرور Flask برای باز نگه داشتن پورت و هندل کردن webhook
+    port = int(os.getenv("PORT", 5000))
     logger.info(f"Starting Flask web server on port {port}...")
+    # در Flask 3.x+ اگر app.run را در ترد اصلی فراخوانی کنیم، نیاز به threading نیست.
+    # Flask خودش Blocking هست و ترد اصلی رو اشغال می‌کنه و webhook ها رو هندل می‌کنه.
     app.run(host="0.0.0.0", port=port)
 
 if __name__ == "__main__":

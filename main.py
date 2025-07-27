@@ -18,6 +18,10 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
+# --- اضافه کردن Flask ---
+from flask import Flask
+app = Flask(__name__)
+
 # --- تنظیمات لاگینگ ---
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -59,34 +63,7 @@ FORBIDDEN_WORDS = [
     "کسخل", "کصکش", "کون", "کونی", "کیر", "کس", "جنده", "حرومزاده", "لاشی", "کثافت", "احمق",
     "بی‌شعور", "نفهم", "نادان", "بیشرف", "هرزه", "فاحشه", "پست", "مایه_ننگ", "مزخرف",
     "گمشو", "خفه_شو", "حرامزاده", "عوضی", "پلید", "رذل", "کثیف", "هیز", "قرمساق", "بی‌وطن",
-    "متجاوز", "قاتل", "دیوث", "دشمن", "خائن", "بی‌ریشه", "کودن", "ابله", "چلمن", "شلخته",
-    "قراضه", "بی‌وجود", "مزخرفات", "خزعبلات", "چرندیات", "واژگون", "نابود", "ویران",
-    "منفور", "مغرض", "فاسد", "ریاکار", "دروغگو", "کلاهبردار", "جعلکار", "گول‌زن",
-    "توطئه‌گر", "فریبکار", "تبهکار", "متخلف", "قانون‌شکن", "مجرم", "جانی", "بزهکار",
-    "ارازل", "اوباش", "زورگیر", "باجگیر", "تروریست", "انتحاری", "آشغال", "زباله",
-    "چرت", "پرت", "مزخرف", "هتاک", "توهین‌آمیز", "زننده", "شرم‌آور", "رسوا", "افتضاح",
-    "فلاکتبار", "نفرت‌انگیز", "ناخوشایند", "مشمئزکننده", "کثیف", "زشت", "کریه",
-    "شیطان", "ابلیس", "جن", "دیو", "اهریمن", "شیاطین", "جنایتکار", "جنایتکاران",
-    "قاتلین", "نابودگران", "مفسدین", "ستمکاران", "ظالمین", "جهنمی", "عذاب‌آور",
-    "نفرین", "لعنت", "مرگ", "تباهی", "نابودی", "هلاکت", "زوال", "فنا", "جهنم", "دوزخ",
-    "شکنجه", "آزار", "اذیت", "خشونت", "تجاوز", "نفرت", "کینه", "خشم", "کینه_توز",
-    "حسادت", "بخل", "طمع", "حرص", "دروغ", "فریب", "خیانت", "نامردی", "پستی", "رذالت",
-    "بی‌غیرت", "بی‌شرف", "بی‌وجدان", "بی‌رحم", "سنگدل", "ظالم", "ستمگر", "متعصب",
-    "جاهل", "نادان", "عقب‌مانده", "بدوی", "همجی", "وحشی", "افراطی", "تندرو", "خشونت‌طلب",
-    "وحشتناک", "ترسناک", "مهیب", "کابوس", "فاجعه", "غم‌انگیز", "تلخ", "دردناک",
-    "شوم", "نحس", "بدشگون", "تاریک", "سیاه", "تیره", "عبوس", "غمبار", "اندوهگین",
-    "مغموم", "افسرده", "افسرده‌کننده", "نومید", "مایوس", "مأیوس‌کننده", "دلگیر",
-    "دلتنگ", "بی‌قرار", "بی‌تاب", "غمزده", "مصیبت_بار", "بحرانی", "خطرناک", "مهلک",
-    "مرگبار", "کثیف", "زشت", "نامطبوع", "منزجرکننده", "حال_به_هم_زن", "غیر_قابل_تحمل",
-    "فاسد", "خراب", "ناپاک", "نجس", "پلید", "کثیف", "چسبناک", "بودار", "گندیده",
-    "پوسیده", "خراب_شده", "از_بین_رفته", "نابود_شده", "ویران_شده", "سوخته", "مخروبه",
-    "داغون", "شلخته", "نامرتب", "کثیف", "بی‌نظم", "پریشان", "آشفته", "سردرگم",
-    "بی‌هدف", "بی‌جهت", "بی‌فایده", "بیهوده", "پوچ", "خالی", "تهی", "بی‌ارزش",
-    "بی‌اهمیت", "بی‌معنی", "مزخرف", "چرند", "پرت_و_پلا", "خزعبل", "بی‌خود",
-    "مزخرف‌گو", "چرند_گو", "بیهوده_گو", "پر_حرف", "زیاده_گو", "ناشی", "غیر_حرفه‌ای",
-    "آماتور", "بی‌تجربه", "کند", "تنبل", "بی‌حال", "بی‌تفاوت", "سرد", "بی‌احساس",
-    "بی‌روح", "خالی_ذهن", "احمق", "کندذهن", "کم‌هوش", "ابله", "نفهم", "نادان",
-    "بی‌سواد", "جاهل", "غیر_منطقی", "بی‌منطق", "غیرهوشمند", "نابخرد", "نادان_بزرگ"
+   
 ]
 
 # --- توابع پایگاه داده (SQLite) ---
@@ -259,7 +236,7 @@ def get_total_users() -> int:
 def get_banned_users_count() -> int:
     """Gets the count of banned users."""
     with sqlite3.connect(DATABASE_PATH) as conn:
-        cursor = conn.cursor()
+        cursor = conn.conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
         return cursor.fetchone()[0]
 
@@ -854,10 +831,11 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.warning("Error occurred, but no effective chat/user to send notification.")
 
 # --- تابع Keep-Alive برای جلوگیری از خواب رفتن Render ---
-def keep_alive():
+# این تابع حالا فقط برای پینگ کردن بیرونی استفاده می شود و سرور Flask جایگزین آن شده است.
+def keep_alive_ping():
     """Pings the Render external URL at regular intervals to keep the service alive."""
     if not RENDER_EXTERNAL_URL:
-        logger.warning("RENDER_EXTERNAL_URL is not set. Keep-alive function will not run.")
+        logger.warning("RENDER_EXTERNAL_URL is not set. Keep-alive ping will not run.")
         return
 
     while True:
@@ -873,9 +851,14 @@ def keep_alive():
         # پینگ هر 10 تا 15 دقیقه (برای Render Worker معمولاً 5-15 دقیقه خوبه)
         time.sleep(13 * 60) # 13 دقیقه
 
-# --- تابع اصلی برای راه‌اندازی ربات ---
+# --- مسیر Flask برای بررسی سلامت (Health Check) ---
+@app.route('/')
+def home():
+    return "Bot is alive!", 200
+
+# --- تابع اصلی برای راه‌اندازی ربات و سرور Flask ---
 def main() -> None:
-    """Starts the bot and the keep-alive thread."""
+    """Starts the bot and the Flask web server."""
     init_db()
 
     # بررسی وجود متغیرهای محیطی حیاتی
@@ -891,60 +874,73 @@ def main() -> None:
         logger.critical("MAIN_ADMIN_ID environment variable is not set. Critical errors will not be reported to a specific admin.")
         # نیازی به raise ValueError نیست، چون ربات بدون ادمین اصلی هم می‌تونه کار کنه ولی با قابلیت‌های محدودتر
 
-    # شروع Keep-Alive در یک ترد جداگانه
+    # شروع ربات تلگرام در یک ترد جداگانه
+    def run_bot():
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+        # --- اضافه کردن هندلرها ---
+        application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("cancel", cancel_operation)) # دستور /cancel برای لغو عملیات
+        application.add_handler(CommandHandler("setalias", set_alias_button_handler)) 
+
+        # هندلر برای دکمه های ریپلای کیبورد (کاربرپسند)
+        application.add_handler(MessageHandler(filters.Regex("^👤 تنظیم نام مستعار$") & ~filters.COMMAND, set_alias_button_handler))
+        application.add_handler(MessageHandler(filters.Regex("^📊 آمار من$") & ~filters.COMMAND, my_stats_command))
+        application.add_handler(MessageHandler(filters.Regex("^ℹ️ راهنما$") & ~filters.COMMAND, help_command))
+        application.add_handler(MessageHandler(filters.Regex("^📝 ارسال پیام$") & ~filters.COMMAND, request_send_message)) # هندلر جدید برای دکمه "ارسال پیام"
+
+        application.add_handler(MessageHandler(filters.Regex("^⚙️ پنل مدیریت$") & ~filters.COMMAND & IS_ADMIN_FILTER, admin_panel))
+        application.add_handler(MessageHandler(filters.Regex("^📋 پیام‌های در انتظار$") & ~filters.COMMAND & IS_ADMIN_FILTER, pending_media_command))
+        application.add_handler(MessageHandler(filters.Regex("^👥 مدیریت کاربران$") & ~filters.COMMAND & IS_ADMIN_FILTER, manage_users))
+        application.add_handler(MessageHandler(filters.Regex("^📊 آمار کل$") & ~filters.COMMAND & IS_ADMIN_FILTER, total_stats_command))
+        application.add_handler(MessageHandler(filters.Regex("^🔙 بازگشت به منوی اصلی$") & ~filters.COMMAND & IS_ADMIN_FILTER, back_to_main_menu))
+
+
+        # هندلرهای مدیریتی (برای حالتی که ادمین‌ها دستور رو تایپ کنن، اگرچه دکمه‌ها بهترن)
+        application.add_handler(CommandHandler("adminpanel", admin_panel, filters=IS_ADMIN_FILTER))
+        application.add_handler(CommandHandler("manageusers", manage_users, filters=IS_ADMIN_FILTER))
+        application.add_handler(CommandHandler("ban", ban_command, filters=IS_ADMIN_FILTER))
+        application.add_handler(CommandHandler("unban", unban_command, filters=IS_ADMIN_FILTER))
+        application.add_handler(CommandHandler("pending", pending_media_command, filters=IS_ADMIN_FILTER))
+        application.add_handler(CommandHandler("mystats", my_stats_command)) # این برای همه کاربرانه
+        application.add_handler(CommandHandler("totalstats", total_stats_command, filters=IS_ADMIN_FILTER))
+
+        # هندلر اصلی برای پیام‌های متنی و رسانه: این حالا فقط پیام‌های وقتی کاربر در حالت خاصی است را می‌گیرد
+        application.add_handler(
+            MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO & ~filters.COMMAND, handle_message)
+        )
+
+        # هندلر برای دکمه‌های اینلاین (تایید/رد رسانه)
+        application.add_handler(CallbackQueryHandler(button_callback))
+
+        # افزودن Error Handler
+        application.add_error_handler(error_handler)
+
+        logger.info("Bot started polling...")
+        application.run_polling(poll_interval=3, timeout=30) 
+
+    # شروع ربات تلگرام در یک ترد جداگانه
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    logger.info("Telegram bot thread started.")
+
+    # شروع Keep-Alive (پینگ کردن آدرس Render خودش) در یک ترد جداگانه
     if RENDER_EXTERNAL_URL:
-        keep_alive_thread = threading.Thread(target=keep_alive)
-        keep_alive_thread.daemon = True # باعث می‌شود ترد با بسته شدن برنامه اصلی بسته شود
+        keep_alive_thread = threading.Thread(target=keep_alive_ping)
+        keep_alive_thread.daemon = True 
         keep_alive_thread.start()
-        logger.info("Keep-alive thread started.")
+        logger.info("Keep-alive ping thread started.")
     else:
-        logger.warning("RENDER_EXTERNAL_URL not set. Keep-alive feature is disabled. Bot might go to sleep on Render.")
+        logger.warning("RENDER_EXTERNAL_URL not set. External keep-alive ping is disabled.")
 
 
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-    # --- اضافه کردن هندلرها ---
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("cancel", cancel_operation)) # دستور /cancel برای لغو عملیات
-    # این CommandHandler برای /setalias سنتی است، میتونید حذفش کنید اگر فقط دکمه رو میخواید
-    application.add_handler(CommandHandler("setalias", set_alias_button_handler)) 
-
-    # هندلر برای دکمه های ریپلای کیبورد (کاربرپسند)
-    application.add_handler(MessageHandler(filters.Regex("^👤 تنظیم نام مستعار$") & ~filters.COMMAND, set_alias_button_handler))
-    application.add_handler(MessageHandler(filters.Regex("^📊 آمار من$") & ~filters.COMMAND, my_stats_command))
-    application.add_handler(MessageHandler(filters.Regex("^ℹ️ راهنما$") & ~filters.COMMAND, help_command))
-    application.add_handler(MessageHandler(filters.Regex("^📝 ارسال پیام$") & ~filters.COMMAND, request_send_message)) # هندلر جدید برای دکمه "ارسال پیام"
-
-    application.add_handler(MessageHandler(filters.Regex("^⚙️ پنل مدیریت$") & ~filters.COMMAND & IS_ADMIN_FILTER, admin_panel))
-    application.add_handler(MessageHandler(filters.Regex("^📋 پیام‌های در انتظار$") & ~filters.COMMAND & IS_ADMIN_FILTER, pending_media_command))
-    application.add_handler(MessageHandler(filters.Regex("^👥 مدیریت کاربران$") & ~filters.COMMAND & IS_ADMIN_FILTER, manage_users))
-    application.add_handler(MessageHandler(filters.Regex("^📊 آمار کل$") & ~filters.COMMAND & IS_ADMIN_FILTER, total_stats_command))
-    application.add_handler(MessageHandler(filters.Regex("^🔙 بازگشت به منوی اصلی$") & ~filters.COMMAND & IS_ADMIN_FILTER, back_to_main_menu))
-
-
-    # هندلرهای مدیریتی (برای حالتی که ادمین‌ها دستور رو تایپ کنن، اگرچه دکمه‌ها بهترن)
-    application.add_handler(CommandHandler("adminpanel", admin_panel, filters=IS_ADMIN_FILTER))
-    application.add_handler(CommandHandler("manageusers", manage_users, filters=IS_ADMIN_FILTER))
-    application.add_handler(CommandHandler("ban", ban_command, filters=IS_ADMIN_FILTER))
-    application.add_handler(CommandHandler("unban", unban_command, filters=IS_ADMIN_FILTER))
-    application.add_handler(CommandHandler("pending", pending_media_command, filters=IS_ADMIN_FILTER))
-    application.add_handler(CommandHandler("mystats", my_stats_command)) # این برای همه کاربرانه
-    application.add_handler(CommandHandler("totalstats", total_stats_command, filters=IS_ADMIN_FILTER))
-
-    # هندلر اصلی برای پیام‌های متنی و رسانه: این حالا فقط پیام‌های وقتی کاربر در حالت خاصی است را می‌گیرد
-    application.add_handler(
-        MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO & ~filters.COMMAND, handle_message)
-    )
-
-    # هندلر برای دکمه‌های اینلاین (تایید/رد رسانه)
-    application.add_handler(CallbackQueryHandler(button_callback))
-
-    # افزودن Error Handler
-    application.add_error_handler(error_handler)
-
-    logger.info("Bot started polling...")
-    application.run_polling(poll_interval=3, timeout=30) 
+    # اجرای سرور Flask برای باز نگه داشتن پورت (معمولاً در محیط‌های هاستینگ لازم است)
+    # Render پورت را از متغیر محیطی PORT می خواند
+    port = int(os.getenv("PORT", 5000)) # پورت پیش فرض 5000 اگر PORT تنظیم نشده باشد
+    logger.info(f"Starting Flask web server on port {port}...")
+    app.run(host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
     main()

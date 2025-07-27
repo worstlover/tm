@@ -1,4 +1,3 @@
-python-telegram-bot>=20.0
-requests
-Flask
-httpx  # 
+python-telegram-bot==22.3 # یا ورژن دقیق شما
+Flask[async]             # این خط رو تغییر بده
+requests  

@@ -241,7 +241,7 @@ async def handle_user_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # اگر پیام متنی است
         if update.message.text:
             await context.bot.send_message(chat_id=CHANNEL_ID, text=final_message_body, parse_mode=ParseMode.MARKDOWN)
-            await update.message.reply_text("✅ پیام شما با موفقیت در کانال منتشر شد.")
+            await update.message.reply_text(user_id, f"✅ پیام شما در کانال {CHANNEL_USERNAME} منتشر شد.")
             update_user_message_time(user_id)
             del USER_STATE[user_id]
         
